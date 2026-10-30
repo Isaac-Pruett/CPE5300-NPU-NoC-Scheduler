@@ -1,0 +1,6 @@
+# Two endpoints share one direct link. A two-node Ring creates duplicate links
+# in ASTRA-sim's congestion-aware backend; FullyConnected works in both backends.
+topology: [ FullyConnected ]
+npus_count: [ 2 ]
+bandwidth: [ 50.0 ]  # GB/s
+latency: [ 500.0 ]  # ns

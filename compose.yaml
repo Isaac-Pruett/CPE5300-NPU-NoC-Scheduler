@@ -1,0 +1,13 @@
+name: npu-noc-scheduler
+services:
+  scheduler:
+    image: npu-noc-scheduler:local
+    build:
+      context: .
+      args:
+        BUILD_JOBS: ${BUILD_JOBS:-4}
+    user: "${LOCAL_UID:-1000}:${LOCAL_GID:-1000}"
+    working_dir: /workspace/scheduler
+    volumes:
+      - ./scheduler:/workspace/scheduler
+    init: true

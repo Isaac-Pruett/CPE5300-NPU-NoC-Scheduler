@@ -1,7 +1,11 @@
 [project]
 name = "scheduler"
 version = "0.1.0"
-description = "Add your description here"
+description = "Synthetic prefill/decode and speculative workloads for ASTRA-sim"
 readme = "README.md"
-requires-python = ">=3.13"
-dependencies = []
+requires-python = ">=3.12"
+dependencies = [
+    "protobuf==5.29.0",
+    "matplotlib==3.9.2",
+    "torch==2.5.1",
+]

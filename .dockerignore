@@ -1,0 +1,10 @@
+**
+!Dockerfile
+!scheduler/
+!scheduler/**
+scheduler/.venv/
+scheduler/**/__pycache__/
+scheduler/traces/
+scheduler/results/
+scheduler/log/
+**/*.pyc
