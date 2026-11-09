@@ -1,6 +1,7 @@
 from abc import ABC, abstractmethod
 
 from schedulers.task import Task, TaskList
+from speculative import EventTrace
 
 
 class Scheduler(ABC):
@@ -15,3 +16,7 @@ class Scheduler(ABC):
         if isinstance(tasks, Task):
             tasks = [tasks]
         self.queue.extend(tasks)
+
+    def admit_trace(self, trace: EventTrace):
+        tasks = [Task(event=event, preemptible=False) for event in trace.events]
+        self.admit(tasks)

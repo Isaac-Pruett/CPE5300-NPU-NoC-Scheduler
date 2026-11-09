@@ -1,5 +1,4 @@
 import heapq
-from this import s
 from typing import override
 
 from schedulers.scheduler import Scheduler
@@ -10,7 +9,6 @@ class CongestionAware(Scheduler):
     @override
     def __init__(self):
         super().__init__()
-
         self.prio_queue: list[Task] = []
 
     @override
@@ -28,10 +26,9 @@ class CongestionAware(Scheduler):
         # prio_queue
         if len(self.prio_queue) != 0:
             next = heapq.heappop(self.prio_queue)
-            heapq.heappush(self.prio_queue, next)
+            if not next.finished:
+                heapq.heappush(self.prio_queue, next)
             return next
 
         # non-prio queue
-        next = self.queue.pop()
-        self.queue.append(next)
-        return next
+        return super().next()
