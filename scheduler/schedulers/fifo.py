@@ -2,10 +2,9 @@ from schedulers.scheduler import Scheduler
 from schedulers.task import Task
 
 
-# TODO add quantum
-class RoundRobin(Scheduler):
+class FIFO(Scheduler):
     def next(self) -> Task:
-        next = self.queue.pop()
+        next = self.queue.pop(0)
         if not next.finished:
             self.queue.append(next)
         return next

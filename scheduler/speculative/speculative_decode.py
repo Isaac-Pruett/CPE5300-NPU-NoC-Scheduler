@@ -7,8 +7,9 @@ from pathlib import Path
 
 from .event_model import Event, EventTrace, EventType
 
-
-DEFAULT_OUTPUT = Path(__file__).resolve().parents[1] / "traces" / "speculative_events.json"
+DEFAULT_OUTPUT = (
+    Path(__file__).resolve().parents[1] / "traces" / "speculative_events.json"
+)
 
 
 def build_speculative_iteration(

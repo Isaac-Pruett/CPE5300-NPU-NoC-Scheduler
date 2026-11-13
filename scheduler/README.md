@@ -38,6 +38,34 @@ generic baseline values, not a calibrated on-chip interconnect. Edit those
 configuration files to explore link parameters; the topology must continue to
 contain two ranks for these workloads.
 
+## Offline compute scheduling
+
+The runner defaults to `--policy fifo`. Use `--policy sjf` for shortest-job-first
+or `--policy none` to preserve the original workload dependencies:
+
+```bash
+docker compose run --rm scheduler python -m astra.run --policy sjf
+```
+
+`astra/run.py` wraps eligible compute events in `Task` objects and asks the selected
+Python scheduler for the next event. It adds rank-local compute dependencies before
+Chakra conversion, modeling one non-preemptive compute resource per rank. FIFO
+selects whole events in admission order, without time slicing. Each selection uses a fresh
+policy instance containing the current eligible tasks; persistent policy state is not
+carried between selections. The input trace is not mutated.
+
+The adapter traverses dependencies and matched SEND-to-RECV edges symbolically to
+avoid ordering work ahead of its prerequisites. This is an offline ordering, not a
+simulation of completion times, arrivals, or network congestion. Communication tags
+must identify unique pairs, and blocked communication/dependency graphs are rejected.
+Communication events themselves are not reordered or assigned priority by this policy.
+
+The chosen policy is recorded in `summary.json` and the trace parameters; parameters
+also contain `compute_schedule`, listing compute event IDs in order for each rank.
+The existing sequential examples offer little policy choice; independent overlapping
+work is needed to demonstrate a difference. This does not implement preemption or
+router arbitration.
+
 ## Existing speculative-decoding simulation
 
 ```bash
@@ -76,6 +104,79 @@ Use `--output-dir results/raw/my-experiment` for a named run; it must not alread
 exist. `--timeout 120` controls the simulator time limit. Failure or timeout leaves
 the run artifacts and a failed summary. The runner also rejects an exit-code-zero
 run if any rank's completion record is missing.
+
+## A workload that distinguishes FIFO and SJF
+
+```bash
+make policy-demo
+```
+
+This runs both policies on the synthetic `--workload policy-demo` workload and
+saves summaries and a chart under `scheduler/results/raw/policy-demo/`. The two
+run directories must not already exist. For another run, choose a new parent:
+
+```bash
+make policy-demo POLICY_DEMO_DIR=results/raw/policy-demo-2
+```
+
+Rank 0 initially has two independent tasks: a 1000 us local task and a 100 us
+producer. The producer sends 4 bytes to unlock a 1000 us consumer on rank 1.
+Rank 1 sends feedback, and a 1 us rank-0 join waits for both branches.
+
+- FIFO runs the long local task first, delaying the producer and remote consumer.
+- SJF runs the producer first, allowing the remote consumer to overlap the long
+  local task. Both policies perform exactly the same computation and communication.
+
+With the pinned congestion-aware backend and default configuration, the validated
+completion times were **2,102,000 cycles (FIFO)** and **1,102,000 cycles (SJF)**,
+a **1.907x** speedup. This is an intentionally constructed scheduling regression,
+not evidence that SJF always wins or that router arbitration has changed.
+
+`tests/test_policy_demo.py` checks the chosen dependencies and, when the ASTRA
+binary is available (including `make test` in Docker), runs both simulations and
+asserts lower SJF completion cycles with equal compute cycles per rank.
+
+## Compare policy results
+
+After completing two runs (each output directory must be new):
+
+```bash
+docker compose run --rm scheduler python -m astra.run \
+  --policy fifo --output-dir results/raw/fifo-demo
+docker compose run --rm scheduler python -m astra.run \
+  --policy sjf --output-dir results/raw/sjf-demo
+
+docker compose run --rm scheduler python compare_results.py \
+  results/raw/fifo-demo results/raw/sjf-demo \
+  --output results/policy_comparison.png
+```
+
+From the repository root, `make compare` runs the comparison for the existing
+`fifo-demo` and `sjf-demo` directories; it does not generate new simulations. Override
+the inputs, output, or extra comparison options as needed (paths are relative to
+`scheduler/` inside the container):
+
+```bash
+make compare
+make compare COMPARE_RUNS="results/raw/fifo-demo results/raw/sjf-comparison"
+make compare COMPARE_OUTPUT=results/my_comparison.png
+make compare COMPARE_ARGS=--no-plot
+```
+
+The comparison prints overall completion cycles, per-rank timing, and offline
+compute orders with event IDs and names. Open `scheduler/results/policy_comparison.png`
+in Zed for the chart. Use `--no-plot` for tables only. Input paths can also point
+directly to `summary.json`; the script reads `events.json` beside each summary.
+
+The first run is the speedup baseline. Overall completion is the maximum rank
+completion cycles, not their sum. Failed/incomplete runs and missing rank records
+are rejected. Differences in workload parameters, backend, simulator revision,
+rank count, or saved configurations produce warnings and suppress speedup ratios.
+These checks flag known confounders, not prove workload equivalence. Identical
+completion cycles are expected when the workload offers no scheduling choice.
+The chart shows measured simulated completion cycles, not per-event timelines,
+TTFT, or host runtime. `plot_results.py` remains the separate speculation-estimate
+plotter and is not used for ASTRA run comparisons.
 
 ## Generate and inspect traces separately
 

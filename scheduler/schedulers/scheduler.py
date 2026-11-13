@@ -1,10 +1,10 @@
-from abc import ABC, abstractmethod
+from abc import abstractmethod
 
 from schedulers.task import Task, TaskList
 from speculative import EventTrace
 
 
-class Scheduler(ABC):
+class Scheduler:
     def __init__(self):
         self.queue: list[Task] = []  # if TaskList, then its MLQ scheduling
 
@@ -18,5 +18,5 @@ class Scheduler(ABC):
         self.queue.extend(tasks)
 
     def admit_trace(self, trace: EventTrace):
-        tasks = [Task(event=event, preemptible=False) for event in trace.events]
+        tasks = [Task(event=event) for event in trace.events]
         self.admit(tasks)

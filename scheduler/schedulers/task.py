@@ -9,7 +9,7 @@ type TaskList = Task | list[Task]
 @dataclasses.dataclass
 class Task:
     event: Event
-    preemptible: bool
+    preemptible: bool = False
     priority: int | None = None
     finished: bool = False
 

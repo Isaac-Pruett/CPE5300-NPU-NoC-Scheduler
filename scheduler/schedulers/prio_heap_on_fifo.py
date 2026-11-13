@@ -5,7 +5,7 @@ from schedulers.scheduler import Scheduler
 from schedulers.task import Task, TaskList
 
 
-class PrioHeapOnRR(Scheduler):
+class PrioHeapOnFIFO(Scheduler):
     @override
     def __init__(self):
         super().__init__()
