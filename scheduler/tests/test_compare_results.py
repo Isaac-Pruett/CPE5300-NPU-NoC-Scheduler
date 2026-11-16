@@ -1,4 +1,4 @@
-"""Comparison reports use recorded ASTRA data, not speculation estimates."""
+"""Keep ASTRA measurements distinct from optional analytical latency reports."""
 
 import io
 import json
@@ -6,8 +6,9 @@ import tempfile
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
-from compare_results import comparison_warnings, load_run, print_report
+from compare_results import comparison_warnings, load_run, print_report, save_chart
 
 
 class ComparisonTests(unittest.TestCase):
@@ -60,6 +61,148 @@ class ComparisonTests(unittest.TestCase):
         self.assertIn("2.000x", output.getvalue())
         self.assertIn("0:first", output.getvalue())
         self.assertIn("N/A", output.getvalue())  # Missing optional compute metrics.
+
+    def test_long_compute_orders_are_previewed_without_modifying_saved_order(self):
+        run = load_run(self.make_run("long"))
+        run.summary["parameters"]["compute_schedule"] = {"0": list(range(100))}
+        run.events["events"] = [
+            {"event_id": index, "name": f"job_{index}"} for index in range(100)
+        ]
+        output = io.StringIO()
+        with redirect_stdout(output):
+            print_report([run], [])
+        self.assertIn("0:job_0", output.getvalue())
+        self.assertIn("75 more", output.getvalue())
+        self.assertNotIn("99:job_99", output.getvalue())
+        self.assertEqual(len(run.summary["parameters"]["compute_schedule"]["0"]), 100)
+
+    def with_latency(self, run):
+        run.events["num_ranks"] = 1
+        run.summary["ranks"].pop("1")
+        run.summary["parameters"]["compute_schedule"] = {"0": [0, 1]}
+        run.summary["single_processor_metrics"] = {
+            "source": "analytical_from_trace_durations_not_astra_timestamps",
+            "mean_completion_us": 12.5,
+            "mean_waiting_us": 5.0,
+            "makespan_us": 15.0,
+            "tasks": [
+                {
+                    "event_id": 0,
+                    "name": "first",
+                    "duration_us": 10.0,
+                    "start_us": 0.0,
+                    "completion_us": 10.0,
+                    "waiting_us": 0.0,
+                },
+                {
+                    "event_id": 1,
+                    "name": "second",
+                    "duration_us": 5.0,
+                    "start_us": 10.0,
+                    "completion_us": 15.0,
+                    "waiting_us": 10.0,
+                },
+            ],
+        }
+        return run
+
+    def test_analytical_latency_is_separate_and_survives_loading(self):
+        run = self.with_latency(load_run(self.make_run("fifo")))
+        (run.directory / "summary.json").write_text(json.dumps(run.summary))
+        (run.directory / "events.json").write_text(json.dumps(run.events))
+        run = load_run(run.directory)
+        output = io.StringIO()
+        with redirect_stdout(output):
+            print_report([run], [])
+        report = output.getvalue()
+        self.assertIn("Completion cycles", report)
+        self.assertIn("ANALYTICAL single-processor latency", report)
+        self.assertIn("not ASTRA timestamps or measurements", report)
+        self.assertIn("Independent COMPUTE jobs, all arriving at time 0", report)
+        self.assertIn("one rank, serial schedule, zero overhead", report)
+        for text in (
+            "Mean completion (us)",
+            "Mean waiting (us)",
+            "Makespan (us)",
+            "12.500",
+            "5.000",
+            "15.000",
+        ):
+            self.assertIn(text, report)
+        self.assertEqual(run.completion_cycles, 100)
+
+    def test_absent_latency_is_not_invented(self):
+        run = load_run(self.make_run("legacy"))
+        output = io.StringIO()
+        with redirect_stdout(output):
+            print_report([run], [])
+        self.assertNotIn("ANALYTICAL", output.getvalue())
+        self.assertNotIn("Mean completion (us)", output.getvalue())
+        self.assertNotIn("single_processor_metrics", run.summary)
+
+    def test_mixed_latency_reports_only_available_metrics_and_keeps_warnings(self):
+        available = self.with_latency(load_run(self.make_run("available")))
+        missing = load_run(self.make_run("legacy", 50))
+        warnings = comparison_warnings([available, missing])
+        self.assertIn("Runs differ in rank count.", warnings)
+        output = io.StringIO()
+        with redirect_stdout(output):
+            print_report([available, missing], warnings)
+        report = output.getvalue()
+        analytical = report.split("ANALYTICAL single-processor latency", 1)[1].split(
+            "Offline compute orders", 1
+        )[0]
+        self.assertIn(available.label, analytical)
+        self.assertNotIn(missing.label, analytical)
+        self.assertIn("WARNING: Runs differ in rank count.", report)
+        self.assertNotIn("2.000x", report)
+
+    def test_chart_adds_latency_subplot_only_when_all_runs_have_metrics(self):
+        for present in ((False, False), (True, False), (True, True)):
+            with self.subTest(present=present):
+                runs = [
+                    load_run(self.make_run(f"chart-{present}-{index}", cycles))
+                    for index, cycles in enumerate((100, 50))
+                ]
+                for run, has_metrics in zip(runs, present):
+                    if has_metrics:
+                        self.with_latency(run)
+                matplotlib = MagicMock()
+                pyplot = matplotlib.pyplot
+                figure, axis, latency_axis = MagicMock(), MagicMock(), MagicMock()
+                pyplot.subplots.return_value = (
+                    figure,
+                    (axis, latency_axis) if all(present) else axis,
+                )
+                with patch.dict(
+                    "sys.modules",
+                    {
+                        "matplotlib": matplotlib,
+                        "matplotlib.pyplot": pyplot,
+                    },
+                ):
+                    save_chart(
+                        runs, self.root / "plots" / "comparison.png", ["confounder"]
+                    )
+                axis.bar.assert_called_once_with([0, 1], [100, 50])
+                axis.set_title.assert_called_once_with("ASTRA-sim policy comparison")
+                if all(present):
+                    self.assertEqual(pyplot.subplots.call_args.args, (2, 1))
+                    latency_axis.bar.assert_called_once_with([0, 1], [12.5, 12.5])
+                    latency_axis.set_ylabel.assert_called_once_with(
+                        "Analytical mean completion (us)"
+                    )
+                    title = latency_axis.set_title.call_args.args[0]
+                    self.assertIn("ANALYTICAL", title)
+                    self.assertIn("not ASTRA measurements", title)
+                else:
+                    self.assertEqual(pyplot.subplots.call_args.args, ())
+                    latency_axis.bar.assert_not_called()
+                self.assertIn("not verified comparable", figure.text.call_args.args[2])
+                figure.savefig.assert_called_once_with(
+                    self.root / "plots" / "comparison.png", dpi=180
+                )
+                pyplot.close.assert_called_once_with(figure)
 
     def test_incomplete_and_missing_rank_runs_are_rejected(self):
         for change in (

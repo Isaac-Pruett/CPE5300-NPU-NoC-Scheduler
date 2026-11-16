@@ -116,9 +116,13 @@ def load_config(
         if not isinstance(topology, str) or topology not in TOPOLOGIES:
             raise ValueError(f"network.yml: unsupported topology {topology!r}")
         count = network["npus_count"][index]
-        if type(count) is not int or count <= 1:
+        if type(count) is not int or count < 1:
             raise ValueError(
-                "network.yml: npus_count entries must be integers greater than 1"
+                "network.yml: npus_count entries must be positive integers"
+            )
+        if count == 1 and topology != "FullyConnected":
+            raise ValueError(
+                "network.yml: singleton dimensions require FullyConnected topology"
             )
         if backend == "congestion-aware" and topology == "Ring" and count == 2:
             raise ValueError(

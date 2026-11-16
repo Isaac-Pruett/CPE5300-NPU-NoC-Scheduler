@@ -5,9 +5,13 @@ COMPARE_RUNS ?= results/raw/fifo-demo results/raw/sjf-demo
 COMPARE_OUTPUT ?= results/policy_comparison.png
 COMPARE_ARGS ?=
 POLICY_DEMO_DIR ?= results/raw/policy-demo
+JETSON_DEMO_DIR ?= results/raw/jetson-demo
 CONFIG_DIR ?= two_rank
+EXPERIMENT ?= jetson
+BENCHMARK_DIR ?=
+BENCHMARK_ARGS ?=
 
-.PHONY: build simulate speculative test profile inspect sweep plot compare policy-demo configs shell
+.PHONY: build simulate speculative test profile inspect sweep plot compare policy-demo jetson-demo benchmark configs policies shell
 build:
 	docker compose build
 
@@ -19,6 +23,9 @@ speculative:
 
 configs:
 	$(RUN) python -m astra.run --list-configs
+
+policies:
+	$(RUN) python -m astra.run --list-policies
 
 test:
 	$(RUN) python -m unittest discover -s tests -v
@@ -42,6 +49,14 @@ policy-demo:
 	$(RUN) python -m astra.run --workload policy-demo --policy fifo --config-dir "$(CONFIG_DIR)" --output-dir "$(POLICY_DEMO_DIR)/fifo"
 	$(RUN) python -m astra.run --workload policy-demo --policy sjf --config-dir "$(CONFIG_DIR)" --output-dir "$(POLICY_DEMO_DIR)/sjf"
 	$(RUN) python compare_results.py "$(POLICY_DEMO_DIR)/fifo" "$(POLICY_DEMO_DIR)/sjf" --output "$(POLICY_DEMO_DIR)/comparison.png"
+
+jetson-demo:
+	$(RUN) python -m astra.run --workload single-processor-demo --policy fifo --config-dir jetson_orin_nano --output-dir "$(JETSON_DEMO_DIR)/fifo"
+	$(RUN) python -m astra.run --workload single-processor-demo --policy sjf --config-dir jetson_orin_nano --output-dir "$(JETSON_DEMO_DIR)/sjf"
+	$(RUN) python compare_results.py "$(JETSON_DEMO_DIR)/fifo" "$(JETSON_DEMO_DIR)/sjf" --output "$(JETSON_DEMO_DIR)/comparison.png"
+
+benchmark:
+	$(RUN) python -m experiments.compare_schedulers --experiment "$(EXPERIMENT)" $(if $(BENCHMARK_DIR),--output-dir "$(BENCHMARK_DIR)") $(BENCHMARK_ARGS)
 
 shell:
 	$(RUN) bash

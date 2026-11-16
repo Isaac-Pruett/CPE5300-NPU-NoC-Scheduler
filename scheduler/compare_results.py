@@ -1,4 +1,4 @@
-"""Compare completed ASTRA runs and plot simulated completion cycles."""
+"""Compare ASTRA completion cycles and optional analytical single-processor latency."""
 
 from __future__ import annotations
 
@@ -129,6 +129,36 @@ def print_report(runs: list[Run], warnings: list[str]) -> None:
     print_table(
         ["Run / policy", "Rank", "Total", "Compute", "Exposed communication"], rows
     )
+    latency_rows = []
+    for run in runs:
+        metrics = run.summary.get("single_processor_metrics")
+        if metrics is not None:
+            latency_rows.append(
+                [
+                    run.label,
+                    f"{metrics['mean_completion_us']:,.3f}",
+                    f"{metrics['mean_waiting_us']:,.3f}",
+                    f"{metrics['makespan_us']:,.3f}",
+                ]
+            )
+    if latency_rows:
+        print(
+            "\nANALYTICAL single-processor latency from trace durations "
+            "(not ASTRA timestamps or measurements):"
+        )
+        print(
+            "Independent COMPUTE jobs, all arriving at time 0; "
+            "one rank, serial schedule, zero overhead."
+        )
+        print_table(
+            [
+                "Run / policy",
+                "Mean completion (us)",
+                "Mean waiting (us)",
+                "Makespan (us)",
+            ],
+            latency_rows,
+        )
     print("\nOffline compute orders (not measured event start/completion times):")
     for run in runs:
         print(f"\n{run.label}")
@@ -142,16 +172,27 @@ def print_report(runs: list[Run], warnings: list[str]) -> None:
         for rank, ids in sorted(schedule.items(), key=lambda item: int(item[0])):
             names = [
                 f"{event_id}:{by_id.get(event_id, {}).get('name', '?')}"
-                for event_id in ids
+                for event_id in ids[:25]
             ]
-            print(f"  Rank {rank}: {' -> '.join(names) or '(no compute)'}")
+            suffix = (
+                f" ... ({len(ids) - 25} more; full order in summary.json parameters.compute_schedule)"
+                if len(ids) > 25
+                else ""
+            )
+            print(f"  Rank {rank}: {' -> '.join(names) or '(no compute)'}{suffix}")
     print(
         "\nExposed communication includes dependency waits; it is not link utilization."
     )
     if len(runs) > 1 and len({run.completion_cycles for run in runs}) == 1:
-        print(
-            "All runs have identical completion cycles; sequential workloads may offer no policy choice."
-        )
+        if latency_rows:
+            print(
+                "Total completion cycles are identical; reordering fixed work on one busy "
+                "resource can improve mean job latency without changing total runtime."
+            )
+        else:
+            print(
+                "All runs have identical completion cycles; sequential workloads may offer no policy choice."
+            )
 
 
 def save_chart(runs: list[Run], output: Path, warnings: list[str]) -> None:
@@ -160,7 +201,15 @@ def save_chart(runs: list[Run], output: Path, warnings: list[str]) -> None:
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    figure, axis = plt.subplots(figsize=(max(7, len(runs) * 2), 5))
+    has_latency = all(
+        run.summary.get("single_processor_metrics") is not None for run in runs
+    )
+    if has_latency:
+        figure, (axis, latency_axis) = plt.subplots(
+            2, 1, figsize=(max(7, len(runs) * 2), 10)
+        )
+    else:
+        figure, axis = plt.subplots(figsize=(max(7, len(runs) * 2), 5))
     positions = list(range(len(runs)))
     bars = axis.bar(positions, [run.completion_cycles for run in runs])
     axis.set_xticks(positions, [run.label for run in runs], rotation=15, ha="right")
@@ -172,6 +221,26 @@ def save_chart(runs: list[Run], output: Path, warnings: list[str]) -> None:
     axis.margins(y=0.15)
     axis.grid(axis="y", alpha=0.25)
     axis.set_axisbelow(True)
+    if has_latency:
+        completions = [
+            run.summary["single_processor_metrics"]["mean_completion_us"]
+            for run in runs
+        ]
+        latency_bars = latency_axis.bar(positions, completions)
+        latency_axis.set_xticks(
+            positions, [run.label for run in runs], rotation=15, ha="right"
+        )
+        latency_axis.set_ylabel("Analytical mean completion (us)")
+        latency_axis.set_title(
+            "ANALYTICAL from trace durations — not ASTRA measurements\n"
+            "Independent COMPUTE jobs, arrival 0; one rank, serial, zero overhead"
+        )
+        latency_axis.bar_label(
+            latency_bars, labels=[f"{value:,.3f}" for value in completions], padding=3
+        )
+        latency_axis.margins(y=0.15)
+        latency_axis.grid(axis="y", alpha=0.25)
+        latency_axis.set_axisbelow(True)
     if warnings:
         figure.text(
             0.5,

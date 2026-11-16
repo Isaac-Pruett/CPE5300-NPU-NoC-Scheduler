@@ -12,22 +12,22 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from astra.configuration import available_configs, load_config
-from schedulers.fifo import FIFO
+from schedulers.discovery import discover_schedulers
 from schedulers.scheduler import Scheduler
-from schedulers.sjf import ShortestJobFirst
 from schedulers.task import Task
 from speculative.event_model import EventTrace, EventType
 from speculative.speculative_decode import build_speculative_iteration
 from workloads.policy_demo import build_policy_demo
 from workloads.prefill_decode import add_workload_arguments, build_prefill_decode
+from workloads.single_processor import (
+    build_single_processor_demo,
+    single_processor_metrics,
+)
 
 BINARIES = {
     "congestion-aware": "AstraSim_Analytical_Congestion_Aware",
     "congestion-unaware": "AstraSim_Analytical_Congestion_Unaware",
 }
-
-
-POLICIES = {"fifo": FIFO, "sjf": ShortestJobFirst}
 
 
 def apply_schedule(
@@ -138,9 +138,18 @@ def completed_ranks(output: str, num_ranks: int) -> dict[str, dict[str, int]]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
+    try:
+        policies = discover_schedulers()
+    except ValueError as exc:
+        parser.error(str(exc))
     parser.add_argument(
         "--workload",
-        choices=["prefill-decode", "speculative", "policy-demo"],
+        choices=[
+            "prefill-decode",
+            "speculative",
+            "policy-demo",
+            "single-processor-demo",
+        ],
         default="prefill-decode",
     )
     parser.add_argument("--backend", choices=BINARIES, default="congestion-aware")
@@ -156,9 +165,14 @@ def main() -> None:
     )
     parser.add_argument(
         "--policy",
-        choices=["none", *POLICIES],
+        choices=["none", *policies],
         default="fifo",
         help="Offline non-preemptive compute ordering per rank; none preserves the original graph",
+    )
+    parser.add_argument(
+        "--list-policies",
+        action="store_true",
+        help="List automatically discovered schedulers and exit",
     )
     parser.add_argument(
         "--output-dir",
@@ -173,7 +187,20 @@ def main() -> None:
     parser.add_argument("--accepted-tokens", type=int, default=3)
     parser.add_argument("--draft-compute-us", type=int, default=100)
     parser.add_argument("--target-verify-us", type=int, default=500)
+    parser.add_argument(
+        "--jobs",
+        type=int,
+        help="Generated single-processor job count; omitted keeps the fixed three-job demo",
+    )
+    parser.add_argument(
+        "--seed", type=int, default=42, help="Seed for generated single-processor jobs"
+    )
     args = parser.parse_args()
+    if args.list_policies:
+        print("none: preserve original workload dependencies")
+        for name, policy in policies.items():
+            print(f"{name}: {policy.__module__}.{policy.__name__}")
+        return
     if args.list_configs:
         for directory in available_configs():
             try:
@@ -184,6 +211,11 @@ def main() -> None:
         return
     if args.timeout <= 0:
         parser.error("--timeout must be positive")
+    if args.jobs is not None:
+        if args.workload != "single-processor-demo":
+            parser.error("--jobs is only supported for single-processor-demo")
+        if args.jobs < 1:
+            parser.error("--jobs must be positive")
 
     if args.workload == "prefill-decode":
         trace = build_prefill_decode(
@@ -193,6 +225,12 @@ def main() -> None:
             args.prefill_bytes,
             args.decode_bytes,
         )
+    elif args.workload == "single-processor-demo":
+        if args.policy == "none":
+            parser.error(
+                "single-processor-demo requires an explicit scheduling policy (not none)"
+            )
+        trace = build_single_processor_demo(jobs=args.jobs, seed=args.seed)
     elif args.workload == "policy-demo":
         trace = build_policy_demo()
     else:
@@ -203,7 +241,7 @@ def main() -> None:
             args.target_verify_us,
         )
     if args.policy != "none":
-        trace = apply_schedule(trace, POLICIES[args.policy])
+        trace = apply_schedule(trace, policies[args.policy])
     trace.parameters["scheduling_policy"] = args.policy
     try:
         config = load_config(
@@ -249,6 +287,8 @@ def main() -> None:
         else "unknown",
         "command": command,
     }
+    if args.workload == "single-processor-demo":
+        summary["single_processor_metrics"] = single_processor_metrics(trace)
     summary_file = output_dir / "summary.json"
 
     def save_summary() -> None:

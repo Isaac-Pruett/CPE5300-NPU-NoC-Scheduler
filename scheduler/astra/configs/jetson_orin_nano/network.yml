@@ -1,0 +1,7 @@
+# One Jetson modeled as one serialized compute resource, with no peer traffic.
+# The singleton topology and positive bandwidth are required configuration fields;
+# bandwidth is an unused placeholder, not Ethernet or LPDDR5 bandwidth.
+topology: [FullyConnected]
+npus_count: [1]
+bandwidth: [1.0] # GB/s; unused (no SEND/RECV events)
+latency: [0.0] # ns; no inter-device link

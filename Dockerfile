@@ -15,15 +15,21 @@ RUN git init /opt/astra-sim \
     && git -C /opt/astra-sim fetch --depth 1 origin "${ASTRA_SIM_REF}" \
     && git -C /opt/astra-sim checkout --detach FETCH_HEAD \
     && git -C /opt/astra-sim submodule update --init --recursive --depth 1 \
-       extern/graph_frontend/chakra extern/network_backend/analytical \
-       extern/remote_memory_backend/analytical extern/helper/fmt extern/helper/spdlog \
+    extern/graph_frontend/chakra extern/network_backend/analytical \
+    extern/remote_memory_backend/analytical extern/helper/fmt extern/helper/spdlog \
     && git -C /opt/astra-sim rev-parse HEAD > /opt/astra-sim-revision
+
+# FullyConnected already supports one device, but the upstream parser rejects it.
+COPY patches/analytical-single-endpoint.patch /tmp/analytical-single-endpoint.patch
+RUN git -C /opt/astra-sim/extern/network_backend/analytical apply --check /tmp/analytical-single-endpoint.patch \
+    && git -C /opt/astra-sim/extern/network_backend/analytical apply /tmp/analytical-single-endpoint.patch \
+    && python3 -c "from pathlib import Path; p = Path('/opt/astra-sim-revision'); p.write_text(p.read_text().strip() + '+analytical-single-endpoint-v1\\n')"
 
 # Generate BOTH bindings with the container's protoc. No host protobuf ABI leaks.
 RUN cd /opt/astra-sim/extern/graph_frontend/chakra/schema/protobuf \
     && protoc --cpp_out=. --python_out=. et_def.proto \
     && cmake -S /opt/astra-sim/build/astra_analytical -B /opt/astra-build \
-       -DBUILDTARGET=all -DCMAKE_BUILD_TYPE=Release \
+    -DBUILDTARGET=all -DCMAKE_BUILD_TYPE=Release \
     && cmake --build /opt/astra-build --parallel "${BUILD_JOBS}"
 
 # Only schema, framing utilities and jsonizer are needed for synthetic traces.

@@ -57,6 +57,7 @@ class ConfigurationTests(unittest.TestCase):
                 "h100_sxm_pair",
                 "tpu_v3_pair",
                 "ethernet_100g_pair",
+                "jetson_orin_nano",
                 "jalapeno_experimental",
             }
             <= names
@@ -65,9 +66,30 @@ class ConfigurationTests(unittest.TestCase):
         for name in names:
             for backend in BINARIES:
                 with self.subTest(name=name, backend=backend):
-                    config = load_config(name, num_ranks=2, backend=backend)
+                    expected_ranks = 1 if name == "jetson_orin_nano" else 2
+                    config = load_config(
+                        name, num_ranks=expected_ranks, backend=backend
+                    )
                     self.assertEqual(config.directory, CONFIG_ROOT / name)
                     self.assertTrue(config.description)
+
+    def test_jetson_has_one_endpoint_and_reference_memory_values(self):
+        config = load_config("jetson_orin_nano", num_ranks=1)
+        files = dict(config.files)
+        network = yaml.safe_load(files["network.yml"])
+        system = json.loads(files["system.json"])
+        profile = json.loads(files["profile.json"])
+        self.assertEqual(network["npus_count"], [1])
+        self.assertEqual(network["latency"], [0.0])
+        self.assertIn("unused", files["network.yml"].decode())
+        with self.assertRaisesRegex(ValueError, "1 ranks but workload requires 2"):
+            load_config("jetson_orin_nano", num_ranks=2)
+        self.assertEqual(system["local-mem-bw"], 102)
+        self.assertEqual(system["peak-perf"], 2.1)
+        self.assertEqual(system["roofline-enabled"], 0)
+        self.assertEqual(profile["reference_specs"]["memory_capacity_gb"], 8)
+        self.assertTrue(profile["sources"])
+        self.assertIn("Super", config.description)
 
     def test_listing_needs_no_simulator(self):
         from astra.run import main
@@ -141,8 +163,9 @@ class ConfigurationTests(unittest.TestCase):
             ("topology", [], "non-empty list"),
             ("topology", ["All-to-All"], "unsupported topology"),
             ("npus_count", [2, 2], "one entry per"),
-            ("npus_count", [True], "integers greater than 1"),
-            ("npus_count", [1], "integers greater than 1"),
+            ("npus_count", [True], "positive integers"),
+            ("npus_count", [0], "positive integers"),
+            ("npus_count", [-1], "positive integers"),
             ("bandwidth", [0], "finite positive"),
             ("bandwidth", [float("inf")], "finite positive"),
             ("bandwidth", ["50"], "finite positive"),
@@ -157,6 +180,17 @@ class ConfigurationTests(unittest.TestCase):
                 self.change("network.yml", **{field: value})
                 with self.assertRaisesRegex(ValueError, error):
                     load_config(self.config)
+
+    def test_singleton_dimensions_require_fully_connected(self):
+        for topology in ("Ring", "Switch"):
+            with self.subTest(topology=topology):
+                self.change("network.yml", topology=[topology], npus_count=[1])
+                with self.assertRaisesRegex(
+                    ValueError, "singleton dimensions require FullyConnected"
+                ):
+                    load_config(self.config)
+        self.change("network.yml", topology=["FullyConnected"], npus_count=[1])
+        self.assertEqual(load_config(self.config, num_ranks=1).num_ranks, 1)
 
     def test_dimension_product_and_backend_specific_ring_restriction(self):
         self.change(
@@ -238,11 +272,10 @@ class HardwareSimulationTests(unittest.TestCase):
                 for preset in available_configs():
                     with self.subTest(backend=backend, preset=preset.name):
                         output = Path(directory) / backend / preset.name
-                        arguments = (
-                            []
-                            if preset.name == "two_rank"
-                            else ["--config-dir", preset.name]
-                        )
+                        config = load_config(preset, backend=backend)
+                        arguments = ["--config-dir", preset.name]
+                        if config.num_ranks == 1:
+                            arguments += ["--workload", "single-processor-demo"]
                         result = run_cli(
                             *arguments,
                             "--backend",
@@ -259,7 +292,10 @@ class HardwareSimulationTests(unittest.TestCase):
                         )
                         summary = json.loads((output / "summary.json").read_text())
                         self.assertEqual(summary["status"], "completed")
-                        self.assertEqual(set(summary["ranks"]), {"0", "1"})
+                        self.assertEqual(
+                            set(summary["ranks"]),
+                            {str(rank) for rank in range(config.num_ranks)},
+                        )
                         self.assertEqual(summary["hardware"]["name"], preset.name)
                         for filename, digest in summary["hardware"]["sha256"].items():
                             saved = (output / filename).read_bytes()

@@ -1,0 +1,27 @@
+{
+  "description": "Single Jetson Orin Nano 8GB (Super mode)-inspired endpoint; one serialized compute resource, no inter-device traffic, fixed compute times.",
+  "sources": [
+    "https://www.nvidia.com/en-us/autonomous-machines/embedded-systems/jetson-orin/"
+  ],
+  "reference_specs": {
+    "variant": "Jetson Orin Nano 8GB with Super-mode reference specifications, not the 4GB variant or Orin Nano 2",
+    "gpu_architecture": "NVIDIA Ampere",
+    "cuda_cores": 1024,
+    "tensor_cores": 32,
+    "cpu_cores": 6,
+    "memory_capacity_gb": 8,
+    "memory_type": "128-bit LPDDR5",
+    "memory_bandwidth_gb_per_s": 102,
+    "cuda_fp32_tflops": 2.1
+  },
+  "assumptions": [
+    "One rank represents one Jetson with one serialized, non-preemptive compute resource. This does not imply that the physical Jetson has only one CPU core or GPU execution unit.",
+    "The reference memory and compute values follow NVIDIA's Super-mode specifications, not the original lower-clock 15W configuration; actual clocks depend on JetPack, power mode, and thermals.",
+    "The singleton FullyConnected topology has no inter-device traffic. Its positive bandwidth is an unused parser placeholder, not a modeled Ethernet connection or LPDDR5 bus.",
+    "The 10-cycle endpoint delay is a synthetic inherited setting, not a measured Jetson timing; the single-processor workload has no communication events.",
+    "local-mem-bw=102 GB/s and peak-perf=2.1 FP32 TFLOPS are reference values only; roofline is disabled and trace durations determine compute time. Sparse INT8 TOPS are not used as floating-point throughput.",
+    "The 8GB shared CPU/GPU memory capacity is descriptive metadata, not a capacity constraint; unified-memory contention, caches, memory controllers, Tensor Core kernels, DVFS, power, and thermals are not simulated.",
+    "The single-processor demo uses independent tasks arriving at time zero, known synthetic durations, and zero scheduling/context-switch overhead. Its mean completion and waiting times are analytical values derived from the selected order, not ASTRA per-event timestamps or Jetson measurements.",
+    "NO_MEMORY_EXPANSION disables remote memory expansion; it does not remove local LPDDR5 memory."
+  ]
+}

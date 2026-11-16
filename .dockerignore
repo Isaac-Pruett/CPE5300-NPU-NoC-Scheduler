@@ -1,5 +1,7 @@
 **
 !Dockerfile
+!patches/
+!patches/**
 !scheduler/
 !scheduler/**
 scheduler/.venv/
