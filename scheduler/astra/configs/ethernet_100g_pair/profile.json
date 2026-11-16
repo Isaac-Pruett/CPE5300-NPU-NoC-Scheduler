@@ -1,0 +1,10 @@
+{
+  "description": "Generic 100 Gbit/s pair; ideal line rate, synthetic 2 us latency, fixed compute times.",
+  "sources": [],
+  "assumptions": [
+    "12.5 GB/s is 100 Gbit/s divided by 8, without protocol overhead.",
+    "Two directly connected endpoints; no Ethernet switches, packet overhead, or transport protocol is modeled.",
+    "2000 ns link latency and 10-cycle endpoint delay are synthetic assumptions.",
+    "Compute and memory reference values are inherited from two_rank; roofline is disabled."
+  ]
+}

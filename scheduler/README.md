@@ -34,9 +34,97 @@ The runner uses `astra/configs/two_rank/`: two directly connected NPUs, 50 GB/s
 bandwidth, 500 ns link latency, fixed compute timing, and no remote memory
 expansion. `FullyConnected` supports both analytical backends; a two-node `Ring`
 creates duplicate links and aborts in the congestion-aware backend. These are
-generic baseline values, not a calibrated on-chip interconnect. Edit those
-configuration files to explore link parameters; the topology must continue to
-contain two ranks for these workloads.
+generic baseline values, not a calibrated on-chip interconnect. Select another
+configuration using `--config-dir`; the topology must contain the same number
+of ranks as the workload (currently two).
+
+## Select a hardware configuration
+
+Rebuild the image after this change to install the pinned YAML parser:
+
+```bash
+docker compose build
+make configs
+make simulate CONFIG_DIR=h100_sxm_pair
+make speculative CONFIG_DIR=tpu_v3_pair
+make simulate CONFIG_DIR=jalapeno_experimental
+make policy-demo CONFIG_DIR=ethernet_100g_pair POLICY_DEMO_DIR=results/raw/ethernet-demo
+```
+
+The runner accepts a bundled preset name or a directory path:
+
+```bash
+docker compose run --rm scheduler python -m astra.run \
+  --config-dir h100_sxm_pair --policy sjf
+
+docker compose run --rm scheduler python -m astra.run \
+  --config-dir astra/configs/ethernet_100g_pair
+
+docker compose run --rm scheduler python -m astra.run --list-configs
+```
+
+| Preset | Modeled endpoints | Link GB/s per direction | Link latency (ns) |
+| --- | --- | ---: | ---: |
+| `two_rank` (default) | Generic baseline pair | 50 | 500 |
+| `h100_sxm_pair` | H100 SXM-inspired pair | 450 | 500 |
+| `tpu_v3_pair` | TPU v3-inspired pair | 50 | 500 |
+| `ethernet_100g_pair` | Generic 100 Gbit/s pair | 12.5 | 2,000 |
+| `jalapeno_experimental` | Experimental OpenAI/Broadcom Jalapeño-inspired pair | 50 | 500 |
+
+These are **idealized two-endpoint experiments**, not calibrated hardware models.
+All use `FullyConnected` and work with both analytical backends. The H100 preset
+assumes an ideal 450 GB/s per direction to one peer, half the advertised
+[900 GB/s aggregate NVLink bandwidth](https://www.nvidia.com/en-eu/data-center/h100/).
+It does not model an HGX board or NVSwitch. The TPU preset records
+[TPU v3 compute and memory reference values](https://docs.cloud.google.com/tpu/docs/v3),
+but uses a synthetic link matching the baseline; it does not model a TPU pod or
+its torus. Ethernet bandwidth is ideal line rate without protocol overhead.
+All link latencies are synthetic. Each preset's `profile.json` records sources
+and assumptions and is copied into the run output.
+
+`jalapeno_experimental` provides a starting point for experiments inspired by
+[OpenAI and Broadcom's Jalapeño](https://openai.com/index/openai-broadcom-jalapeno-inference-chip/).
+Each rank represents one abstract chip. It uses the original baseline's network
+and system values because the official announcements reviewed do not provide the
+interconnect details needed to calibrate this model. Its 50 GB/s bandwidth,
+500 ns latency, memory bandwidth, and peak compute settings are **synthetic
+placeholders, not Jalapeño specifications**. The profile records this explicitly.
+It does not model Jalapeño's internal NoC, KV-cache placement, power, or specialized
+kernels. With equal workload inputs it should match the baseline's timing;
+reported chip benchmark speedups are not applied as simulation multipliers.
+Copy the preset to a custom directory to sweep assumptions or replace them with
+documented measurements as they become available.
+
+Compute durations still come from the workload's `--*-compute-us` arguments.
+`roofline-enabled` must be `0`: these traces contain durations, not the operation
+and memory counts needed to predict hardware compute performance. `peak-perf`
+and `local-mem-bw` do not rescale these compute durations. In particular, the
+TPU preset and baseline are expected to produce equal timings for equal inputs.
+
+To create a custom profile, copy a complete preset directory and edit it. The
+required files are `system.json`, `network.yml`, and `remote_memory.json`.
+`profile.json` is optional; when present it must contain a `description` string.
+Network YAML must contain equal-length `topology`, `npus_count`, `bandwidth`, and
+`latency` lists. Supported topology names are `FullyConnected`, `Ring`, and
+`Switch`; the product of `npus_count` must match the workload's rank count.
+The runner rejects invalid dimensions, non-finite/negative timings, non-positive
+bandwidth, and two-node rings on the congestion-aware backend before creating
+an output directory. It checks common system fields; ASTRA remains responsible
+for backend-specific optional settings.
+
+Bare bundled names resolve independently of the working directory. Other paths
+are relative to the process working directory; use `./two_rank` to explicitly
+select a local directory with the same name as a preset. Docker commands run
+in `/workspace/scheduler`, with the host `scheduler/` directory mounted there.
+Place custom configs under that directory or supply an additional Docker mount.
+The incomplete `NVIDIA_H100` and `TPU_v3` draft folders are not listed as presets;
+the complete presets above are separate from those drafts.
+
+Every `summary.json` now contains a `hardware` record with the preset/directory
+name, source path, rank count, description, and SHA-256 hashes. The exact validated
+config bytes are saved with each run. Existing comparisons check saved simulator
+config files, so comparisons between different hardware configurations suppress
+policy speedup ratios and report the differences.
 
 ## Offline compute scheduling
 

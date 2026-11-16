@@ -1,0 +1,46 @@
+{
+  "schema_version": "v0.0.4",
+  "workload_name": "Transformer_Layer_TP2_DP2",
+  "num_npus": 4,
+  "nodes": [
+    {
+      "id": 0,
+      "name": "Forward_GEMM_1",
+      "type": "COMPUTE",
+      "duration_ns": 45000,
+      "dependencies": []
+    },
+    {
+      "id": 1,
+      "name": "TP_AllReduce_Forward",
+      "type": "COMMUNICATION",
+      "collective_type": "ALL_REDUCE",
+      "comm_size_bytes": 16777216,
+      "comm_group": [0, 1],
+      "dependencies": [0]
+    },
+    {
+      "id": 2,
+      "name": "Forward_GEMM_2",
+      "type": "COMPUTE",
+      "duration_ns": 32000,
+      "dependencies": [1]
+    },
+    {
+      "id": 3,
+      "name": "Backward_Data_GEMM",
+      "type": "COMPUTE",
+      "duration_ns": 64000,
+      "dependencies": [2]
+    },
+    {
+      "id": 4,
+      "name": "DP_AllReduce_Gradients",
+      "type": "COMMUNICATION",
+      "collective_type": "ALL_REDUCE",
+      "comm_size_bytes": 67108864,
+      "comm_group": [0, 2],
+      "dependencies": [3]
+    }
+  ]
+}

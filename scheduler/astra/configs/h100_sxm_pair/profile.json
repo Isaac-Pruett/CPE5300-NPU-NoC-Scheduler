@@ -1,0 +1,12 @@
+{
+  "description": "H100 SXM-inspired pair; idealized NVLink bandwidth, synthetic latency, fixed compute times.",
+  "sources": [
+    "https://www.nvidia.com/en-eu/data-center/h100/"
+  ],
+  "assumptions": [
+    "Two endpoints with one FullyConnected dimension, not an eight-GPU HGX topology.",
+    "450 GB/s per direction is an idealized allocation of half the advertised 900 GB/s aggregate NVLink bandwidth to one peer.",
+    "500 ns link latency and 10-cycle endpoint delay are synthetic assumptions, not measured H100 timings.",
+    "3350 GB/s memory bandwidth and 989 TFLOPS dense BF16 are reference values only; roofline is disabled."
+  ]
+}

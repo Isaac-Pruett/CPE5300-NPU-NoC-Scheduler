@@ -1,0 +1,5 @@
+# Idealized two-endpoint model. See profile.json for sources and assumptions.
+topology: [ FullyConnected ]
+npus_count: [ 2 ]
+bandwidth: [ 12.5 ]  # GB/s per direction
+latency: [ 2000.0 ]  # ns; synthetic assumption

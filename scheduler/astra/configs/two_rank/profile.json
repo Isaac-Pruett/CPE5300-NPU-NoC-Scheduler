@@ -1,0 +1,7 @@
+{
+  "description": "Original synthetic baseline: two endpoints, 50 GB/s, 500 ns, fixed compute times.",
+  "sources": [],
+  "assumptions": [
+    "Generic synthetic values; not calibrated to a particular accelerator."
+  ]
+}

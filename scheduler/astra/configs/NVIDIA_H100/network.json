@@ -1,0 +1,7 @@
+{
+  "topology": "All-to-All",
+  "num_nodes": 8,
+  "link_bandwidth_gbps": 3600,
+  "link_latency_ns": 100,
+  "routing_policy": "adaptive"
+}

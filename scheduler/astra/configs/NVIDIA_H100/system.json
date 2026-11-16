@@ -1,0 +1,9 @@
+{
+  "roofline-enabled": 1,
+  "peak-perf": 1979,
+  "local-mem-bw": 3350,
+  "endpoint-delay": 10,
+  "scheduling-policy": "LIFO",
+  "collective-optimization": "enabled",
+  "active-chunks-per-collective": 4
+}

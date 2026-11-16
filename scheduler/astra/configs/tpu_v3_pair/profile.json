@@ -1,0 +1,12 @@
+{
+  "description": "TPU v3-inspired pair; synthetic 50 GB/s link and latency, fixed compute times.",
+  "sources": [
+    "https://docs.cloud.google.com/tpu/docs/v3"
+  ],
+  "assumptions": [
+    "Two endpoints with one FullyConnected dimension, not the TPU pod 2D torus.",
+    "50 GB/s link bandwidth, 500 ns link latency, and 10-cycle endpoint delay are synthetic assumptions, not TPU ICI measurements.",
+    "900 GB/s memory bandwidth and 123 TFLOPS BF16 are reference values only; roofline is disabled.",
+    "Network settings intentionally match two_rank: equal fixed-duration workloads should have equal timing."
+  ]
+}

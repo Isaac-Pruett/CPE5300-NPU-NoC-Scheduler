@@ -8,9 +8,10 @@ import re
 import shutil
 import subprocess
 from collections.abc import Callable
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
+from astra.configuration import available_configs, load_config
 from schedulers.fifo import FIFO
 from schedulers.scheduler import Scheduler
 from schedulers.sjf import ShortestJobFirst
@@ -20,7 +21,6 @@ from speculative.speculative_decode import build_speculative_iteration
 from workloads.policy_demo import build_policy_demo
 from workloads.prefill_decode import add_workload_arguments, build_prefill_decode
 
-CONFIG = Path(__file__).resolve().parent / "configs" / "two_rank"
 BINARIES = {
     "congestion-aware": "AstraSim_Analytical_Congestion_Aware",
     "congestion-unaware": "AstraSim_Analytical_Congestion_Unaware",
@@ -145,6 +145,16 @@ def main() -> None:
     )
     parser.add_argument("--backend", choices=BINARIES, default="congestion-aware")
     parser.add_argument(
+        "--config-dir",
+        default="two_rank",
+        help="Bundled hardware preset name or directory path (default: two_rank)",
+    )
+    parser.add_argument(
+        "--list-configs",
+        action="store_true",
+        help="List bundled hardware presets and exit",
+    )
+    parser.add_argument(
         "--policy",
         choices=["none", *POLICIES],
         default="fifo",
@@ -164,6 +174,14 @@ def main() -> None:
     parser.add_argument("--draft-compute-us", type=int, default=100)
     parser.add_argument("--target-verify-us", type=int, default=500)
     args = parser.parse_args()
+    if args.list_configs:
+        for directory in available_configs():
+            try:
+                config = load_config(directory, backend=args.backend)
+            except ValueError as exc:
+                parser.error(str(exc))
+            print(f"{directory.name}: {config.num_ranks} ranks — {config.description}")
+        return
     if args.timeout <= 0:
         parser.error("--timeout must be positive")
 
@@ -187,12 +205,18 @@ def main() -> None:
     if args.policy != "none":
         trace = apply_schedule(trace, POLICIES[args.policy])
     trace.parameters["scheduling_policy"] = args.policy
+    try:
+        config = load_config(
+            args.config_dir, num_ranks=trace.num_ranks, backend=args.backend
+        )
+    except ValueError as exc:
+        parser.error(str(exc))
     binary = shutil.which(BINARIES[args.backend])
     if binary is None:
         parser.error(
             "ASTRA-sim binary missing. Run this command through docker compose."
         )
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S.%fZ")
     output_dir = (
         args.output_dir
         or Path("results/raw") / f"{stamp}-{args.workload}-{args.backend}"
@@ -202,8 +226,7 @@ def main() -> None:
     from tracegen.spec_to_chakra import convert_trace
 
     convert_trace(trace, output_dir / "workload")
-    for name in ("system.json", "network.yml", "remote_memory.json"):
-        shutil.copyfile(CONFIG / name, output_dir / name)
+    config.write_to(output_dir)
 
     command = [
         binary,
@@ -220,6 +243,7 @@ def main() -> None:
         "timing_source": "synthetic",
         "parameters": trace.parameters,
         "scheduling_policy": args.policy,
+        "hardware": config.summary(),
         "astra_sim_revision": revision_file.read_text().strip()
         if revision_file.exists()
         else "unknown",
@@ -233,7 +257,7 @@ def main() -> None:
     save_summary()
     log = output_dir / "simulator.log"
     print(
-        f"Running {args.workload} with {args.backend}; artifacts: {output_dir}",
+        f"Running {args.workload} with {args.backend}, config {config.directory.name}; artifacts: {output_dir}",
         flush=True,
     )
     try:

@@ -1,0 +1,6 @@
+# Experimental Jalapeno-inspired chip pair, using synthetic baseline values.
+# These are not published Jalapeno interconnect specifications. See profile.json.
+topology: [ FullyConnected ]
+npus_count: [ 2 ]
+bandwidth: [ 50.0 ]  # GB/s per direction; synthetic baseline assumption
+latency: [ 500.0 ]  # ns; synthetic baseline assumption

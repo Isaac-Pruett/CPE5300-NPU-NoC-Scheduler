@@ -1,0 +1,17 @@
+{
+  "description": "Experimental OpenAI/Broadcom Jalapeno-inspired pair; uncalibrated baseline settings, fixed compute times.",
+  "model_status": "experimental_uncalibrated",
+  "rank_represents": "One abstract accelerator chip; two chips connected by a synthetic direct link.",
+  "sources": [
+    "https://openai.com/index/openai-broadcom-jalapeno-inference-chip/",
+    "https://openai.com/index/jalapeno-first-results/"
+  ],
+  "assumptions": [
+    "Sources identify the chip and describe its inference architecture; they do not establish the numerical configuration used here.",
+    "FullyConnected with two endpoints is a modeling choice, not a claim about Jalapeno internal NoC or rack topology.",
+    "50 GB/s per-direction link bandwidth, 500 ns link latency, and 10-cycle endpoint delay are inherited synthetic baseline assumptions.",
+    "local-mem-bw=1600 GB/s and peak-perf=900 TFLOPS are inherited baseline placeholders, not Jalapeno specifications. Roofline is disabled, so these values do not rescale compute durations.",
+    "Compute durations are supplied by the workload. KV-cache locality, internal tiles, memory capacity, power, and specialized kernels are not modeled.",
+    "With identical workload inputs this preset should match two_rank timing. Use it as a starting point for parameter sweeps, not to claim measured Jalapeno performance or speedup."
+  ]
+}
