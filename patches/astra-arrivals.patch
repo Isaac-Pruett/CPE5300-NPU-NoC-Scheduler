@@ -1,0 +1,29 @@
+diff --git a/astra-sim/workload/Workload.hh b/astra-sim/workload/Workload.hh
+--- a/astra-sim/workload/Workload.hh
++++ b/astra-sim/workload/Workload.hh
+@@ -70,6 +70,7 @@
+   private:
+     std::unordered_set<uint64_t> timing_ready_nodes;
+     std::ofstream event_timing_stream;
++    std::unordered_set<uint64_t> arrival_wakeups;
+     // From the ET node, find out the corresponding communicator group, and
+     // return the pointer. If no communicator group is specified for this ET
+     // node, return nullptr.
+diff --git a/astra-sim/workload/Workload.cc b/astra-sim/workload/Workload.cc
+--- a/astra-sim/workload/Workload.cc
++++ b/astra-sim/workload/Workload.cc
+@@ -161,6 +161,14 @@
+     }
+     for (const auto node_id : dependancy_free_nodes_set) {
+         std::shared_ptr<ETFeederNode> node = et_feeder->lookupNode(node_id);
++        const auto arrival_tick = node->get_attr<uint64_t>("arrival_us", 0) * 1000 / CLOCK_PERIOD;
++        const auto now = Sys::boostedTick();
++        if (now < arrival_tick) {
++            if (arrival_wakeups.insert(arrival_tick).second) {
++                sys->register_event(this, EventType::General, nullptr, arrival_tick - now);
++            }
++            continue;
++        }
+         if (getenv("ASTRA_EVENT_TIMING_DIR") != nullptr &&
+             timing_ready_nodes.insert(node_id).second) {
+             record_event_timing("ready", node_id);

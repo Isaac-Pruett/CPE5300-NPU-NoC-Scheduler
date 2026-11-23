@@ -8,7 +8,6 @@ from pathlib import Path
 
 from speculative.event_model import Event, EventTrace, EventType
 
-
 try:
     from chakra.schema.protobuf.et_def_pb2 import (
         COMM_RECV_NODE,
@@ -27,7 +26,9 @@ except ImportError as exc:
     ) from exc
 
 
-DEFAULT_INPUT = Path(__file__).resolve().parents[1] / "traces" / "speculative_events.json"
+DEFAULT_INPUT = (
+    Path(__file__).resolve().parents[1] / "traces" / "speculative_events.json"
+)
 DEFAULT_OUTPUT_PREFIX = Path(__file__).resolve().parents[1] / "traces" / "spec_decode"
 CHAKRA_VERSION = "0.0.4"
 
@@ -50,6 +51,8 @@ def _convert_event(event: Event, tag_map: dict[str, int], comm_priority: int) ->
     node = Node(id=event.event_id, name=event.name)
     node.data_deps.extend(event.dependencies)
     node.attr.append(AttributeProto(name="is_cpu_op", bool_val=False))
+    if event.arrival_us:
+        node.attr.append(AttributeProto(name="arrival_us", uint64_val=event.arrival_us))
     if event.phase is not None:
         node.attr.append(AttributeProto(name="phase", string_val=event.phase))
 

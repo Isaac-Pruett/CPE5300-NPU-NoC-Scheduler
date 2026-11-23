@@ -21,7 +21,7 @@
     "The 10-cycle endpoint delay is a synthetic inherited setting, not a measured Jetson timing; the single-processor workload has no communication events.",
     "local-mem-bw=102 GB/s and peak-perf=2.1 FP32 TFLOPS are reference values only; roofline is disabled and trace durations determine compute time. Sparse INT8 TOPS are not used as floating-point throughput.",
     "The 8GB shared CPU/GPU memory capacity is descriptive metadata, not a capacity constraint; unified-memory contention, caches, memory controllers, Tensor Core kernels, DVFS, power, and thermals are not simulated.",
-    "The single-processor demo uses independent tasks arriving at time zero, known synthetic durations, and zero scheduling/context-switch overhead. Its mean completion and waiting times are analytical values derived from the selected order, not ASTRA per-event timestamps or Jetson measurements.",
+    "The single-processor demo uses independent tasks, known synthetic durations, and zero scheduling/context-switch overhead. Releases default to zero or use explicit/interval arrival times enforced by ASTRA. Simulated flow/waiting metrics use callback timestamps; analytical order-based values remain separate references, not Jetson measurements.",
     "NO_MEMORY_EXPANSION disables remote memory expansion; it does not remove local LPDDR5 memory."
   ]
 }

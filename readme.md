@@ -18,26 +18,60 @@ docker compose run --rm scheduler
 The default command generates a synthetic two-rank prefill/decode pipeline and
 runs the congestion-aware analytical backend. Each run creates a new directory
 under `scheduler/results/raw/` containing the event IR, two Chakra traces, copies
-of the simulator configurations, `simulator.log`, and `summary.json`. Completion
-requires both ranks to finish. Runs have a 120-second simulator timeout.
+of the simulator configurations, `simulator.log`, and `summary.json`. New runs also
+save per-rank raw `event_timing.rank<N>.log`, validated `event_timing.csv`,
+`timesteps.json`, and `gantt.png`. Completion requires both ranks to finish and
+ready/start/end observations for every event. Runs have a 120-second simulator timeout.
 
 With Make, the equivalent is `make build simulate`. On Linux, Make also passes
-your UID/GID to avoid output ownership problems. For direct Compose commands on
+your UID/GID to avoid output ownership problems. Make automatically selects
+`docker compose` when available, otherwise `docker-compose`; override with
+`COMPOSE=...` if needed. For direct Compose commands on
 Linux, first run `export LOCAL_UID=$(id -u) LOCAL_GID=$(id -g)` if your IDs differ
 from 1000. Docker Desktop handles the host bind mount on macOS. The image builds
 natively on ARM64 or AMD64; no forced x86 emulation is configured.
 
 ## Workflows
 
-| Command | Purpose |
-| --- | --- |
-| `make simulate` | Synthetic prefill/decode pipeline through congestion-aware ASTRA-sim |
-| `make speculative` | Existing draft/verify example through congestion-unaware ASTRA-sim |
-| `make test` | Event graph, Chakra encoding, and completion-check tests |
-| `make profile` | CPU PyTorch execution and Kineto traces |
-| `make inspect` | Inspect the generated Kineto trace |
-| `make sweep plot` | Existing synthetic speculation estimate sweep and PNG plot |
-| `make shell` | Interactive shell with the same tools and mounted source |
+| Command            | Purpose                                                                                 |
+| ------------------ | --------------------------------------------------------------------------------------- |
+| `make simulate`    | Synthetic prefill/decode pipeline through congestion-aware ASTRA-sim                    |
+| `make speculative` | Existing draft/verify example through congestion-unaware ASTRA-sim                      |
+| `make test`        | Event graph, encoding, completion, timing, and plotting tests                           |
+| `make benchmark`   | All discovered compute policies, comparison, per-policy and combined Gantt charts       |
+| `make gantt`       | Plot observed event timelines from existing runs (`GANTT_RUNS`, default `COMPARE_RUNS`) |
+| `make profile`     | CPU PyTorch execution and Kineto traces                                                 |
+| `make inspect`     | Inspect the generated Kineto trace                                                      |
+| `make sweep plot`  | Existing synthetic speculation estimate sweep and PNG plot                              |
+| `make shell`       | Interactive shell with the same tools and mounted source                                |
+
+For a named batch and a zoomed FIFO/SJF timeline (paths relative to `scheduler/`):
+
+```bash
+make benchmark EXPERIMENT=jetson BENCHMARK_DIR=results/raw/my-batch
+make gantt GANTT_RUNS="results/raw/my-batch/fifo results/raw/my-batch/sjf" GANTT_OUTPUT=results/my_gantt.png GANTT_ARGS="--start-us 0 --end-us 500 --max-events 2000"
+```
+
+The batch parent must not already exist. It contains per-policy runs, `comparison.png`,
+a combined `gantt.png`, and `batch.json` recording the Gantt path. `make gantt`
+defaults to `results/gantt.png`; its default 500-event limit spans the entire
+combined chart and explicitly annotates truncation.
+
+For synthetic single-processor arrivals (default releases remain zero):
+
+```bash
+make benchmark EXPERIMENT=jetson BENCHMARK_ARGS="-- --jobs 1000 --seed 42 --arrival-interval-us 500"
+make benchmark EXPERIMENT=jetson BENCHMARK_ARGS="-- --arrival-times-us 500 2000 2000"
+```
+
+Only `single-processor-demo` accepts these mutually exclusive options: interval
+releases are `i * N`, or supply one explicit time per job (unsorted allowed).
+`--jobs`/`--seed` remain supported; explicit times must match the job count.
+H100/network-workload arrival options are rejected. The single-rank compute
+planner uses one persistent dequeuing policy over arrived, dependency-ready jobs
+at completion decisions, without preemption. It plans offline with known fixed
+durations, not live Python feedback. Other network DAGs retain the old adapter
+and reject nonzero arrivals.
 
 See [scheduler/README.md](scheduler/README.md) for direct Docker commands,
 workload parameters, output interpretation, and limitations.
@@ -63,6 +97,40 @@ source into `/opt/astra-sim`; builds live at `/opt/astra-build`. Changing schedu
 source is immediate through the bind mount; dependency or simulator changes
 require `docker compose build` again. The image also includes scheduler source
 for standalone use without Compose.
+
+Docker applies `patches/analytical-single-endpoint.patch`,
+`patches/astra-event-timing.patch`, and `patches/astra-arrivals.patch`; the revision
+suffix is `+analytical-single-endpoint-v1+event-timing-v1+arrivals-v1`.
+**Rebuild with `docker compose build` for arrivals support.** `Event.arrival_us`
+is an integer microsecond release, default 0, optionally serialized; the converter
+emits Chakra uint64 `arrival_us`. The simulator gates events and schedules wakeups,
+not fake GPU work. Zero-arrival defaults preserve the original results.
+Instrumentation is opt-in
+through `ASTRA_EVENT_TIMING_DIR`, set automatically by the runner. It records first
+observed arrival-satisfied, dependency-free readiness (including policy edges),
+dispatch, and completion
+callbacks as actual ticks plus `clock_period_ns` (`CLOCK_PERIOD`, currently 1 ns).
+The runner validates completeness, bounds, dependencies, and monotonicity; it does
+not infer timestamps. Old runs without telemetry must be rerun.
+
+Gantt charts show rank/type lanes with overlapping RECV sublanes on a microsecond
+axis. SEND completion is not assumed delivery, and RECV includes waiting.
+CSV schema version 2 adds declared `arrival_us` and `arrival_cycle`.
+`timesteps.json` is a sorted postprocessed arrived/ready/started/completed transition
+export with cycle/time references, not interactive stepping. `arrived` is sourced
+from declared `workload_release_times`; ready/start/end are simulator callbacks. Single-processor
+summaries now separate callback-based `simulated_single_processor_metrics`
+(source `astra_sim_callbacks`, declared workload releases) from retained analytical
+`single_processor_metrics`. `mean_flow_us` is completion minus arrival;
+`mean_response_us` and non-preemptive waiting are start minus arrival.
+`mean_completion_us` remains absolute completion for compatibility. Reports/charts
+prefer mean flow when available, never mixing it with legacy absolute completion. Comparisons use callback latency when all runs support
+it, explicitly labeled analytical fallback for legacy-only inputs, and no
+mixed-source latency panel. These are simulated observations, not hardware measurements.
+
+Arrival support is validated by 115 passing tests, including release enforcement
+and idle gaps on both analytical backends.
+Historical baseline values remain documented in the workflow and roadmap.
 
 The first build needs internet access and several minutes. `BUILD_JOBS=2 docker
 compose build` reduces peak compiler memory. Ubuntu package updates and transitive

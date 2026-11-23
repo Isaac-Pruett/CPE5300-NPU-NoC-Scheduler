@@ -13,6 +13,7 @@ from pathlib import Path
 from astra.configuration import load_config
 from astra.run import BINARIES
 from compare_results import comparison_warnings, load_run, print_report, save_chart
+from plot_timeline import save_gantt
 from schedulers.discovery import discover_schedulers
 
 EXPERIMENTS = {
@@ -83,6 +84,7 @@ def run_experiment(
         "completed_policies": [],
         "runs": {name: str(output / name) for name in names},
         "chart": str(output / "comparison.png"),
+        "gantt": str(output / "gantt.png"),
     }
     manifest_path = output / "batch.json"
 
@@ -138,10 +140,12 @@ def run_experiment(
         warnings = comparison_warnings(runs)
         print_report(runs, warnings)
         save_chart(runs, output / "comparison.png", warnings)
+        save_gantt([run.directory for run in runs], output / "gantt.png")
         manifest["comparison_warnings"] = warnings
         manifest["status"] = "completed"
         manifest.pop("current_policy", None)
         print(f"\nComparison chart: {output / 'comparison.png'}", flush=True)
+        print(f"Gantt chart: {output / 'gantt.png'}", flush=True)
         return output
     except Exception as exc:
         manifest["status"] = "failed"

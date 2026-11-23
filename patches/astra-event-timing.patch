@@ -1,0 +1,96 @@
+diff --git a/astra-sim/workload/Workload.hh b/astra-sim/workload/Workload.hh
+--- a/astra-sim/workload/Workload.hh
++++ b/astra-sim/workload/Workload.hh
+@@ -6,9 +6,11 @@
+ #ifndef __WORKLOAD_HH__
+ #define __WORKLOAD_HH__
+ 
++#include <fstream>
+ #include <memory>
+ #include <string>
+ #include <unordered_map>
++#include <unordered_set>
+ 
+ #include "astra-sim/system/Callable.hh"
+ #include "astra-sim/system/CommunicatorGroup.hh"
+@@ -50,6 +52,7 @@
+     void skip_invalid(std::shared_ptr<Chakra::FeederV3::ETFeederNode> node);
+     void call(EventType event, CallData* data);
+     void fire();
++    void record_event_timing(const char* stage, uint64_t node_id);
+ 
+     // stats
+     void report();
+@@ -65,6 +68,8 @@
+     bool is_finished;
+ 
+   private:
++    std::unordered_set<uint64_t> timing_ready_nodes;
++    std::ofstream event_timing_stream;
+     // From the ET node, find out the corresponding communicator group, and
+     // return the pointer. If no communicator group is specified for this ET
+     // node, return nullptr.
+diff --git a/astra-sim/workload/Workload.cc b/astra-sim/workload/Workload.cc
+--- a/astra-sim/workload/Workload.cc
++++ b/astra-sim/workload/Workload.cc
+@@ -14,6 +14,7 @@
+ #include <json/json.hpp>
+ 
+ #include <iostream>
++#include <stdexcept>
+ #include <stdlib.h>
+ #include <unistd.h>
+ 
+@@ -133,6 +134,23 @@
+     }
+ }
+ 
++void Workload::record_event_timing(const char* stage, uint64_t node_id) {
++    const char* directory = getenv("ASTRA_EVENT_TIMING_DIR");
++    if (directory == nullptr) {
++        return;
++    }
++    if (!event_timing_stream.is_open()) {
++        event_timing_stream.open(std::string(directory) + "/event_timing.rank" +
++                                 std::to_string(sys->id) + ".log");
++        if (!event_timing_stream) {
++            throw std::runtime_error("Cannot open ASTRA event timing output");
++        }
++    }
++    event_timing_stream << "ASTRA_EVENT_TIMING_V1," << sys->id << "," << node_id
++                        << "," << stage << "," << Sys::boostedTick() << ","
++                        << CLOCK_PERIOD << std::endl;
++}
++
+ void Workload::issue_dep_free_nodes() {
+     auto& dependancy_resolver = this->et_feeder->getDependancyResolver();
+     auto dependancy_free_nodes =
+@@ -143,6 +161,10 @@
+     }
+     for (const auto node_id : dependancy_free_nodes_set) {
+         std::shared_ptr<ETFeederNode> node = et_feeder->lookupNode(node_id);
++        if (getenv("ASTRA_EVENT_TIMING_DIR") != nullptr &&
++            timing_ready_nodes.insert(node_id).second) {
++            record_event_timing("ready", node_id);
++        }
+         if (hw_resource->is_available(node)) {
+             issue(node);
+         }
+diff --git a/astra-sim/workload/Statistics.cc b/astra-sim/workload/Statistics.cc
+--- a/astra-sim/workload/Statistics.cc
++++ b/astra-sim/workload/Statistics.cc
+@@ -33,12 +33,14 @@
+     operator_statistics[node_id] =
+         OperatorStatistics(node_id, start_time, type);
+     start_times.insert({start_time, node_id});
++    workload->record_event_timing("start", node_id);
+ }
+ 
+ void Statistics::record_end(std::shared_ptr<Chakra::ETFeederNode> node,
+                             Tick end_time) {
+     const NodeId& node_id = node->id();
+     this->get_operator_statistics(node_id).end_time = end_time;
++    workload->record_event_timing("end", node_id);
+ }
+ 
+ Statistics::OperatorStatistics::OperatorType Statistics::OperatorStatistics::

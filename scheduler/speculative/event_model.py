@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
+import json
 from collections import Counter
 from dataclasses import dataclass, field
 from enum import Enum
-import json
 from pathlib import Path
 from typing import Any
 
@@ -33,9 +33,17 @@ class Event:
     bytes: int | None = None
     tag: str | None = None
     phase: str | None = None
+    arrival_us: int = 0
 
     def validate(self, num_ranks: int) -> None:
         """Validate fields that do not require the complete event graph."""
+        if (
+            type(self.arrival_us) is not int
+            or not 0 <= self.arrival_us <= (2**64 - 1) // 1000
+        ):
+            raise ValueError(
+                f"event {self.event_id} arrival_us must be a non-negative integer fitting uint64 nanoseconds"
+            )
         if self.event_id < 0:
             raise ValueError(f"event_id must be non-negative: {self.event_id}")
         if not 0 <= self.rank < num_ranks:
@@ -86,6 +94,8 @@ class Event:
             value = getattr(self, key)
             if value is not None:
                 result[key] = value
+        if self.arrival_us:
+            result["arrival_us"] = self.arrival_us
         return result
 
     @classmethod
@@ -103,6 +113,7 @@ class Event:
             bytes=data.get("bytes"),
             tag=data.get("tag"),
             phase=data.get("phase"),
+            arrival_us=data.get("arrival_us", 0),
         )
 
 
@@ -159,7 +170,9 @@ class EventTrace:
         for event_id in events_by_id:
             visit(event_id)
 
-        def communication_key(event: Event) -> tuple[int | None, int | None, str | None, int | None]:
+        def communication_key(
+            event: Event,
+        ) -> tuple[int | None, int | None, str | None, int | None]:
             return (event.src, event.dst, event.tag, event.bytes)
 
         sends = Counter(

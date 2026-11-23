@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -12,6 +13,13 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from astra.configuration import available_configs, load_config
+from astra.event_timing import (
+    PREFIX,
+    simulated_single_processor_metrics,
+    write_event_timings,
+)
+from astra.planning import plan_single_processor
+from plot_timeline import save_gantt
 from schedulers.discovery import discover_schedulers
 from schedulers.scheduler import Scheduler
 from schedulers.task import Task
@@ -36,10 +44,18 @@ def apply_schedule(
 ) -> EventTrace:
     """Return an offline, non-preemptive compute schedule, one resource per rank.
 
-    Traversal means placement in the schedule, not simulated completion. A fresh
-    policy selects from each ready-set snapshot so policies that requeue unfinished
-    tasks can be used without pretending those tasks have executed.
+    One-rank compute traces use a persistent release-aware policy and a planning
+    clock based on known durations. Network DAGs retain symbolic traversal and
+    fresh ready-set snapshots. Neither path marks Task.finished as executed.
     """
+    if trace.num_ranks == 1 and all(
+        event.event_type is EventType.COMPUTE for event in trace.events
+    ):
+        return plan_single_processor(trace, policy_factory)
+    if any(event.arrival_us for event in trace.events):
+        raise ValueError(
+            "arrival-aware scheduling currently supports only single-rank compute workloads"
+        )
     scheduled = EventTrace.from_dict(trace.to_dict())
     by_id = {event.event_id: event for event in scheduled.events}
     dependencies = {
@@ -195,6 +211,19 @@ def main() -> None:
     parser.add_argument(
         "--seed", type=int, default=42, help="Seed for generated single-processor jobs"
     )
+    arrival_options = parser.add_mutually_exclusive_group()
+    arrival_options.add_argument(
+        "--arrival-interval-us",
+        type=int,
+        default=0,
+        help="Single-processor releases at 0, interval, 2*interval, ... microseconds",
+    )
+    arrival_options.add_argument(
+        "--arrival-times-us",
+        type=int,
+        nargs="+",
+        help="Explicit non-negative release times, one per single-processor job",
+    )
     args = parser.parse_args()
     if args.list_policies:
         print("none: preserve original workload dependencies")
@@ -217,6 +246,12 @@ def main() -> None:
         if args.jobs < 1:
             parser.error("--jobs must be positive")
 
+    if args.arrival_interval_us or args.arrival_times_us is not None:
+        if args.workload != "single-processor-demo":
+            parser.error("arrival options are only supported for single-processor-demo")
+    if args.arrival_interval_us < 0:
+        parser.error("--arrival-interval-us must be non-negative")
+
     if args.workload == "prefill-decode":
         trace = build_prefill_decode(
             args.decode_tokens,
@@ -230,7 +265,15 @@ def main() -> None:
             parser.error(
                 "single-processor-demo requires an explicit scheduling policy (not none)"
             )
-        trace = build_single_processor_demo(jobs=args.jobs, seed=args.seed)
+        try:
+            trace = build_single_processor_demo(
+                jobs=args.jobs,
+                seed=args.seed,
+                arrival_interval_us=args.arrival_interval_us,
+                arrival_times_us=args.arrival_times_us,
+            )
+        except ValueError as exc:
+            parser.error(str(exc))
     elif args.workload == "policy-demo":
         trace = build_policy_demo()
     else:
@@ -301,6 +344,8 @@ def main() -> None:
         flush=True,
     )
     try:
+        environment = dict(os.environ)
+        environment["ASTRA_EVENT_TIMING_DIR"] = str(output_dir)
         with log.open("w") as stream:
             result = subprocess.run(
                 command,
@@ -309,15 +354,41 @@ def main() -> None:
                 stderr=subprocess.STDOUT,
                 timeout=args.timeout,
                 check=False,
+                env=environment,
             )
         output = log.read_text()
-        print(output, end="")
+        print(
+            "\n".join(
+                line for line in output.splitlines() if not line.startswith(PREFIX)
+            )
+        )
         summary["returncode"] = result.returncode
         if result.returncode:
             raise RuntimeError(
                 f"ASTRA-sim exited with {result.returncode}; inspect {log}"
             )
         summary["ranks"] = completed_ranks(output, trace.num_ranks)
+        raw_timing_files = [
+            output_dir / f"event_timing.rank{rank}.log"
+            for rank in range(trace.num_ranks)
+        ]
+        if not all(path.is_file() for path in raw_timing_files):
+            raise RuntimeError(
+                "ASTRA event timing files missing; rebuild with 'docker compose build' for event-timing-v1"
+            )
+        timing_output = "\n".join(path.read_text() for path in raw_timing_files)
+        summary["event_timing"], timing_rows = write_event_timings(
+            timing_output,
+            trace,
+            summary["ranks"],
+            output_dir,
+        )
+        summary["event_timing"]["raw_files"] = [path.name for path in raw_timing_files]
+        if args.workload == "single-processor-demo":
+            summary["simulated_single_processor_metrics"] = (
+                simulated_single_processor_metrics(timing_rows, trace)
+            )
+        save_gantt([output_dir], output_dir / "gantt.png")
         summary["status"] = "completed"
     except Exception as exc:
         summary["status"] = "failed"

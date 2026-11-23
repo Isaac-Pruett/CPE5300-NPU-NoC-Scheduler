@@ -67,6 +67,7 @@ class BatchTests(unittest.TestCase):
                 side_effect=self.simulate,
             ),
             patch("experiments.compare_schedulers.save_chart") as chart,
+            patch("experiments.compare_schedulers.save_gantt") as gantt,
             redirect_stdout(io.StringIO()),
         ):
             result = run_experiment(
@@ -93,6 +94,9 @@ class BatchTests(unittest.TestCase):
             expected,
         )
         self.assertEqual(chart.call_args.args[1], result / "comparison.png")
+        gantt.assert_called_once_with(
+            [result / name for name in expected], result / "gantt.png"
+        )
 
     def test_existing_output_is_never_overwritten(self):
         self.output.mkdir()
@@ -234,6 +238,11 @@ class BatchSimulationTests(unittest.TestCase):
                     self.assertEqual(manifest["comparison_warnings"], [])
                     self.assertTrue(
                         (output / "comparison.png")
+                        .read_bytes()
+                        .startswith(b"\x89PNG\r\n\x1a\n")
+                    )
+                    self.assertTrue(
+                        (output / "gantt.png")
                         .read_bytes()
                         .startswith(b"\x89PNG\r\n\x1a\n")
                     )

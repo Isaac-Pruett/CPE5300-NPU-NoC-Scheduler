@@ -1,4 +1,4 @@
-"""Compare ASTRA completion cycles and optional analytical single-processor latency."""
+"""Compare ASTRA completion cycles, callback latency, and analytical references."""
 
 from __future__ import annotations
 
@@ -97,6 +97,26 @@ def print_table(headers: list[str], rows: list[list[str]]) -> None:
         print(" | ".join(value.ljust(width) for value, width in zip(row, widths)))
 
 
+def latency_field(metrics: dict) -> str:
+    """Never treat absolute completion as release-relative flow implicitly."""
+    return "mean_flow_us" if "mean_flow_us" in metrics else "mean_completion_us"
+
+
+def latency_heading(runs: list[Run], key: str) -> str:
+    fields = {latency_field(run.summary[key]) for run in runs if key in run.summary}
+    if fields == {"mean_flow_us"}:
+        return "Mean flow (us)"
+    if fields == {"mean_completion_us"}:
+        return "Mean completion (us)"
+    return "Mean flow / legacy completion (us)"
+
+
+def latency_basis(metrics: dict) -> str:
+    if latency_field(metrics) == "mean_flow_us":
+        return "flow = completion - workload release"
+    return "legacy absolute completion; assumes all jobs arriving at time 0"
+
+
 def print_report(runs: list[Run], warnings: list[str]) -> None:
     for warning in warnings:
         print(f"WARNING: {warning}")
@@ -129,6 +149,85 @@ def print_report(runs: list[Run], warnings: list[str]) -> None:
     print_table(
         ["Run / policy", "Rank", "Total", "Compute", "Exposed communication"], rows
     )
+    simulated_rows = []
+    task_rows = []
+    total_simulated_tasks = 0
+    release_tasks = any(
+        "mean_flow_us" in run.summary.get("simulated_single_processor_metrics", {})
+        for run in runs
+    )
+    task_fields = ["duration_us", "start_us", "completion_us", "waiting_us"]
+    task_headers = ["Duration (us)", "Start (us)", "Completion (us)", "Waiting (us)"]
+    if release_tasks:
+        task_fields = ["arrival_us", *task_fields, "flow_us", "response_us"]
+        task_headers = ["Arrival (us)", *task_headers, "Flow (us)", "Response (us)"]
+    for run in runs:
+        metrics = run.summary.get("simulated_single_processor_metrics")
+        if metrics is None:
+            continue
+        simulated_rows.append(
+            [
+                run.label,
+                *[
+                    f"{metrics[field]:,.3f}"
+                    for field in (
+                        latency_field(metrics),
+                        "mean_waiting_us",
+                        "makespan_us",
+                    )
+                ],
+                latency_basis(metrics),
+            ]
+        )
+        total_simulated_tasks += len(metrics["tasks"])
+        for task in metrics["tasks"][:25]:
+            task_rows.append(
+                [
+                    run.label,
+                    str(task["event_id"]),
+                    task["name"],
+                    *[
+                        f"{task[field]:,.3f}" if field in task else "N/A"
+                        for field in task_fields
+                    ],
+                ]
+            )
+    if simulated_rows:
+        print(
+            "\nSIMULATED single-processor latency — actual ASTRA callback measurements:"
+        )
+        print(
+            "Source: astra_sim_callbacks; ASTRA ticks converted from ns to us "
+            "(not an analytical estimate). Arrivals are declared workload releases, "
+            "not observed callbacks. Flow is release-relative; completion and makespan "
+            "are absolute timestamps/horizons. Legacy mean completion assumes "
+            "all jobs arriving at time 0; it is not mixed with flow in charts."
+        )
+        print("Only runs with simulated metrics are shown in this section.")
+        print_table(
+            [
+                "Run / policy",
+                latency_heading(runs, "simulated_single_processor_metrics"),
+                "Mean waiting (us)",
+                "Makespan (us)",
+                "Latency basis",
+            ],
+            simulated_rows,
+        )
+        print("\nSIMULATED per-job latency (us):")
+        print_table(
+            [
+                "Run / policy",
+                "Event ID",
+                "Job",
+                *task_headers,
+            ],
+            task_rows,
+        )
+        if total_simulated_tasks > len(task_rows):
+            print(
+                "Showing at most 25 jobs per run; full simulated timestamps are in event_timing.csv and summary.json."
+            )
     latency_rows = []
     for run in runs:
         metrics = run.summary.get("single_processor_metrics")
@@ -136,26 +235,29 @@ def print_report(runs: list[Run], warnings: list[str]) -> None:
             latency_rows.append(
                 [
                     run.label,
-                    f"{metrics['mean_completion_us']:,.3f}",
+                    f"{metrics[latency_field(metrics)]:,.3f}",
                     f"{metrics['mean_waiting_us']:,.3f}",
                     f"{metrics['makespan_us']:,.3f}",
+                    latency_basis(metrics),
                 ]
             )
     if latency_rows:
         print(
-            "\nANALYTICAL single-processor latency from trace durations "
+            "\nANALYTICAL single-processor latency reference from trace durations "
             "(not ASTRA timestamps or measurements):"
         )
         print(
+            "Declared workload releases for flow; legacy reference assumes "
             "Independent COMPUTE jobs, all arriving at time 0; "
-            "one rank, serial schedule, zero overhead."
+            "one rank, serial schedule, zero overhead. Completion and makespan are absolute."
         )
         print_table(
             [
                 "Run / policy",
-                "Mean completion (us)",
+                latency_heading(runs, "single_processor_metrics"),
                 "Mean waiting (us)",
                 "Makespan (us)",
+                "Latency basis",
             ],
             latency_rows,
         )
@@ -184,11 +286,19 @@ def print_report(runs: list[Run], warnings: list[str]) -> None:
         "\nExposed communication includes dependency waits; it is not link utilization."
     )
     if len(runs) > 1 and len({run.completion_cycles for run in runs}) == 1:
-        if latency_rows:
+        if simulated_rows or latency_rows:
             print(
                 "Total completion cycles are identical; reordering fixed work on one busy "
                 "resource can improve mean job latency without changing total runtime."
             )
+            if simulated_rows:
+                print(
+                    "SIMULATED latency above uses actual ASTRA callbacks, not estimates."
+                )
+            if latency_rows:
+                print(
+                    "ANALYTICAL latency above is a separate trace-duration reference."
+                )
         else:
             print(
                 "All runs have identical completion cycles; sequential workloads may offer no policy choice."
@@ -201,9 +311,23 @@ def save_chart(runs: list[Run], output: Path, warnings: list[str]) -> None:
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    has_latency = all(
+    simulated_present = [
+        run.summary.get("simulated_single_processor_metrics") is not None
+        for run in runs
+    ]
+    latency_key = None
+    if all(simulated_present):
+        latency_key = "simulated_single_processor_metrics"
+    elif not any(simulated_present) and all(
         run.summary.get("single_processor_metrics") is not None for run in runs
-    )
+    ):
+        latency_key = "single_processor_metrics"
+    if latency_key is not None:
+        fields = {latency_field(run.summary[latency_key]) for run in runs}
+        if len(fields) != 1:
+            # Do not compare release-relative latency with absolute timestamps.
+            latency_key = None
+    has_latency = latency_key is not None
     if has_latency:
         figure, (axis, latency_axis) = plt.subplots(
             2, 1, figsize=(max(7, len(runs) * 2), 10)
@@ -222,19 +346,31 @@ def save_chart(runs: list[Run], output: Path, warnings: list[str]) -> None:
     axis.grid(axis="y", alpha=0.25)
     axis.set_axisbelow(True)
     if has_latency:
-        completions = [
-            run.summary["single_processor_metrics"]["mean_completion_us"]
-            for run in runs
-        ]
+        field = latency_field(runs[0].summary[latency_key])
+        is_flow = field == "mean_flow_us"
+        metric_name = "flow" if is_flow else "completion"
+        arrival_note = (
+            "Declared workload releases, not observed arrival callbacks; flow = end - arrival"
+            if is_flow
+            else "Legacy absolute completion; assumes all jobs arriving at time 0"
+        )
+        completions = [run.summary[latency_key][field] for run in runs]
         latency_bars = latency_axis.bar(positions, completions)
         latency_axis.set_xticks(
             positions, [run.label for run in runs], rotation=15, ha="right"
         )
-        latency_axis.set_ylabel("Analytical mean completion (us)")
-        latency_axis.set_title(
-            "ANALYTICAL from trace durations — not ASTRA measurements\n"
-            "Independent COMPUTE jobs, arrival 0; one rank, serial, zero overhead"
-        )
+        if latency_key == "simulated_single_processor_metrics":
+            latency_axis.set_ylabel(f"Simulated mean {metric_name} (us)")
+            latency_axis.set_title(
+                "SIMULATED actual ASTRA callbacks (astra_sim_callbacks) — ns to us\n"
+                + arrival_note
+            )
+        else:
+            latency_axis.set_ylabel(f"Analytical mean {metric_name} (us)")
+            latency_axis.set_title(
+                "ANALYTICAL from trace durations — not ASTRA measurements\n"
+                + arrival_note
+            )
         latency_axis.bar_label(
             latency_bars, labels=[f"{value:,.3f}" for value in completions], padding=3
         )

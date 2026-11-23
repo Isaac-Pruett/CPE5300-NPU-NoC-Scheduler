@@ -25,6 +25,18 @@ RUN git -C /opt/astra-sim/extern/network_backend/analytical apply --check /tmp/a
     && git -C /opt/astra-sim/extern/network_backend/analytical apply /tmp/analytical-single-endpoint.patch \
     && python3 -c "from pathlib import Path; p = Path('/opt/astra-sim-revision'); p.write_text(p.read_text().strip() + '+analytical-single-endpoint-v1\\n')"
 
+# Opt-in event telemetry records the simulator's own dependency-ready/start/end ticks.
+COPY patches/astra-event-timing.patch /tmp/astra-event-timing.patch
+RUN git -C /opt/astra-sim apply --check /tmp/astra-event-timing.patch \
+    && git -C /opt/astra-sim apply /tmp/astra-event-timing.patch \
+    && python3 -c "from pathlib import Path; p = Path('/opt/astra-sim-revision'); p.write_text(p.read_text().strip() + '+event-timing-v1\\n')"
+
+# Release events at arrival_us without creating fake compute or communication work.
+COPY patches/astra-arrivals.patch /tmp/astra-arrivals.patch
+RUN git -C /opt/astra-sim apply --check /tmp/astra-arrivals.patch \
+    && git -C /opt/astra-sim apply /tmp/astra-arrivals.patch \
+    && python3 -c "from pathlib import Path; p = Path('/opt/astra-sim-revision'); p.write_text(p.read_text().strip() + '+arrivals-v1\\n')"
+
 # Generate BOTH bindings with the container's protoc. No host protobuf ABI leaks.
 RUN cd /opt/astra-sim/extern/graph_frontend/chakra/schema/protobuf \
     && protoc --cpp_out=. --python_out=. et_def.proto \

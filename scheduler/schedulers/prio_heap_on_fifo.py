@@ -25,12 +25,7 @@ class PrioHeapOnFIFO(Scheduler):
                 self.queue.append(task)
 
     def next(self) -> Task:
-        # prio_queue
-        if len(self.prio_queue) != 0:
-            next = heapq.heappop(self.prio_queue)
-            if not next.finished:
-                heapq.heappush(self.prio_queue, next)
-            return next
+        if self.prio_queue:
+            return heapq.heappop(self.prio_queue)
 
-        # non-prio queue
-        return super().next()
+        return self.queue.pop(0)

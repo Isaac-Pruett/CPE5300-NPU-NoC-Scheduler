@@ -1,9 +1,13 @@
 export LOCAL_UID := $(shell id -u)
 export LOCAL_GID := $(shell id -g)
-RUN = docker compose run --rm scheduler
+COMPOSE ?= $(shell if docker compose version >/dev/null 2>&1; then printf 'docker compose'; else printf 'docker-compose'; fi)
+RUN = $(COMPOSE) run --rm scheduler
 COMPARE_RUNS ?= results/raw/fifo-demo results/raw/sjf-demo
 COMPARE_OUTPUT ?= results/policy_comparison.png
 COMPARE_ARGS ?=
+GANTT_RUNS ?= $(COMPARE_RUNS)
+GANTT_OUTPUT ?= results/gantt.png
+GANTT_ARGS ?=
 POLICY_DEMO_DIR ?= results/raw/policy-demo
 JETSON_DEMO_DIR ?= results/raw/jetson-demo
 CONFIG_DIR ?= two_rank
@@ -11,9 +15,9 @@ EXPERIMENT ?= jetson
 BENCHMARK_DIR ?=
 BENCHMARK_ARGS ?=
 
-.PHONY: build simulate speculative test profile inspect sweep plot compare policy-demo jetson-demo benchmark configs policies shell
+.PHONY: build simulate speculative test profile inspect sweep plot compare gantt policy-demo jetson-demo benchmark configs policies shell
 build:
-	docker compose build
+	$(COMPOSE) build
 
 simulate:
 	$(RUN) python -m astra.run --workload prefill-decode --config-dir "$(CONFIG_DIR)"
@@ -44,6 +48,9 @@ plot:
 
 compare:
 	$(RUN) python compare_results.py $(COMPARE_RUNS) --output "$(COMPARE_OUTPUT)" $(COMPARE_ARGS)
+
+gantt:
+	$(RUN) python plot_timeline.py $(GANTT_RUNS) --output "$(GANTT_OUTPUT)" $(GANTT_ARGS)
 
 policy-demo:
 	$(RUN) python -m astra.run --workload policy-demo --policy fifo --config-dir "$(CONFIG_DIR)" --output-dir "$(POLICY_DEMO_DIR)/fifo"

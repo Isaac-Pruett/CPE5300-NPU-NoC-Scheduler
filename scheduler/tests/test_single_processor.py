@@ -154,6 +154,27 @@ class SingleProcessorTests(unittest.TestCase):
                     self.assertEqual(summary["status"], "completed")
                     self.assertEqual(set(summary["ranks"]), {"0"})
                     self.assertEqual(summary["hardware"]["num_ranks"], 1)
+                    self.assertEqual(
+                        summary["event_timing"]["source"], "astra_sim_callbacks"
+                    )
+                    self.assertEqual(summary["event_timing"]["event_count"], 3)
+                    self.assertTrue(
+                        (output / "gantt.png")
+                        .read_bytes()
+                        .startswith(b"\x89PNG\r\n\x1a\n")
+                    )
+                    self.assertTrue((output / "event_timing.csv").is_file())
+                    self.assertTrue((output / "timesteps.json").is_file())
+                    simulated = summary["simulated_single_processor_metrics"]
+                    self.assertEqual(simulated["source"], "astra_sim_callbacks")
+                    self.assertEqual(
+                        simulated["mean_completion_us"],
+                        1070 if policy == "fifo" else 410,
+                    )
+                    self.assertEqual(
+                        simulated["mean_waiting_us"], 700 if policy == "fifo" else 40
+                    )
+                    self.assertEqual(simulated["makespan_us"], 1110)
                     summaries[policy] = summary
                 self.assertEqual(
                     summaries["fifo"]["ranks"]["0"]["cycles"],

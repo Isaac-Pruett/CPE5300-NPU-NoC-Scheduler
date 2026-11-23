@@ -40,7 +40,7 @@ of ranks as the workload (currently two).
 
 ## Select a hardware configuration
 
-Rebuild the image after this change to install the pinned YAML parser:
+Build/rebuild the image to include the pinned YAML parser and simulator patches:
 
 ```bash
 docker compose build
@@ -116,10 +116,22 @@ docker compose run --rm scheduler python -m astra.run \
   --workload single-processor-demo --config-dir jetson_orin_nano --policy sjf
 ```
 
-The demo has independent 1000, 100, and 10 us compute jobs, all arriving at time
-zero. FIFO chooses long-to-short; SJF chooses short-to-long. There are no network
-operations, idle gaps, or scheduling/context-switch costs. SJF is given exact job
-durations; real workloads may require estimates.
+By default, the demo has independent 1000, 100, and 10 us compute jobs, all
+arriving at time zero. FIFO chooses long-to-short; SJF chooses short-to-long.
+This original example has no network operations or idle gaps. There are no modeled
+scheduling/context-switch costs. SJF is given exact job durations; real workloads
+may require estimates. Default zero arrivals preserve the original results.
+
+Only `single-processor-demo` accepts arrival CLI options: `--arrival-interval-us N`
+(default 0) releases job `i` at `i * N`, or `--arrival-times-us 500 2000 2000`
+supplies one release per job. The options are mutually exclusive; explicit times
+may be unsorted. Both work with `--jobs` and `--seed` (the explicit list must match
+the job count). H100/network-workload arrival CLI options are rejected.
+
+`Event.arrival_us` is an integer microsecond release time, default 0, and an
+optional serialized field. The converter emits a Chakra uint64 `arrival_us`
+attribute. `patches/astra-arrivals.patch` enforces releases with simulator gating
+and wakeups, not fake GPU work.
 
 | Metric                   |      FIFO |       SJF | Source                                       |
 | ------------------------ | --------: | --------: | -------------------------------------------- |
@@ -128,22 +140,36 @@ durations; real workloads may require estimates.
 | Mean job waiting (us)    |       700 |        40 | Analytical from selected order and durations |
 | Makespan (us)            |     1,110 |     1,110 | Analytical sum of durations                  |
 
-The latency values are saved under `single_processor_metrics` in `summary.json`;
-per-task start/completion/waiting values there are **analytical, not extracted ASTRA
-timestamps or Jetson measurements**. The comparison prints a separate labeled table
-and adds a second chart panel for mean completion time. Equal total runtime is
-expected: reordering the same work on one busy resource does not reduce its sum.
-This demonstrates lower average latency for this workload, not improved overall
-throughput, lower scheduler implementation overhead, starvation freedom, or a
-hardware performance claim. No per-event latency is invented for other workloads.
+The table preserves the historical validated completion-cycle baseline and
+analytical latency calculation. `single_processor_metrics` remains a separate
+**analytical** record from the selected order and durations. New runs also save
+`simulated_single_processor_metrics`, with source `astra_sim_callbacks`, using
+actual ASTRA start/completion timestamps and declared workload releases.
+`mean_flow_us` is mean completion minus arrival; `mean_response_us` and waiting
+are mean start minus arrival for this non-preemptive model. `mean_completion_us`
+remains absolute completion time for compatibility, not arrival-relative latency.
+These are simulated observations, not Jetson measurements.
+
+The comparison prints separately labeled tables. Its latency chart uses actual
+callback metrics when all runs support them; legacy-only runs use an explicitly
+labeled analytical fallback. Reports/charts prefer mean flow time when available
+and never mix it with legacy absolute completion values. Mixed-source runs do not
+get a combined latency panel.
+Equal total runtime is expected for the original zero-arrival example: reordering
+the same work on one busy resource does
+not reduce its sum. This demonstrates lower average latency for this workload, not
+improved overall throughput, lower scheduler implementation overhead, starvation
+freedom, or a hardware performance claim.
 
 Upstream analytical ASTRA rejects `npus_count: [1]` despite FullyConnected topology
 construction supporting it. `Dockerfile` applies
 `patches/analytical-single-endpoint.patch` to the pinned source before compilation.
 Only singleton FullyConnected dimensions are allowed; singleton Ring/Switch remain
 invalid. The simulator revision recorded in summaries has the suffix
-`+analytical-single-endpoint-v1` so patched runs can be distinguished. Rebuild with
-`docker compose build` before running these commands.
+`+analytical-single-endpoint-v1+event-timing-v1+arrivals-v1` so patched runs can be
+distinguished. Docker also applies the event-timing and arrivals patches.
+**Rebuild with `docker compose build` for arrivals support**; the prior event-timing
+image is not sufficient.
 
 `jalapeno_experimental` provides a starting point for experiments inspired by
 [OpenAI and Broadcom's Jalapeño](https://openai.com/index/openai-broadcom-jalapeno-inference-chip/).
@@ -201,15 +227,20 @@ docker compose run --rm scheduler python -m astra.run --policy sjf
 `astra/run.py` wraps eligible compute events in `Task` objects and asks the selected
 Python scheduler for the next event. It adds rank-local compute dependencies before
 Chakra conversion, modeling one non-preemptive compute resource per rank. FIFO
-selects whole events in admission order, without time slicing. Each selection uses a fresh
-policy instance containing the current eligible tasks; persistent policy state is not
-carried between selections. The input trace is not mutated.
+selects whole events in admission order, without time slicing. The input trace is
+not mutated.
 
-The adapter traverses dependencies and matched SEND-to-RECV edges symbolically to
-avoid ordering work ahead of its prerequisites. This is an offline ordering, not a
-simulation of completion times, arrivals, or network congestion. Communication tags
-must identify unique pairs, and blocked communication/dependency graphs are rejected.
-Communication events themselves are not reordered or assigned priority by this policy.
+For single-rank compute-only traces, the planner uses one persistent dequeuing
+policy, admitting only arrived, dependency-ready jobs at completion decisions
+(and advancing to a release when idle). Execution is non-preemptive. This is an
+offline plan using known fixed durations, not live Python feedback from ASTRA.
+ASTRA separately enforces the declared releases.
+
+Other network DAGs retain the existing symbolic adapter: it traverses dependencies
+and matched SEND-to-RECV edges and constructs a fresh policy per selection. It
+rejects nonzero arrivals and does not simulate network congestion. Communication
+tags must identify unique pairs, and blocked communication/dependency graphs are
+rejected. Communication events are not reordered or assigned priority by this policy.
 
 The chosen policy is recorded in `summary.json` and the trace parameters; parameters
 also contain `compute_schedule`, listing compute event IDs in order for each rank.
@@ -250,8 +281,9 @@ module imports cause an actionable CLI error rather than silently hiding policie
 Discovery imports modules but does not instantiate policies; only trusted project
 code belongs in this package, and modules should avoid import-time side effects.
 
-The adapter still constructs a fresh policy per selection: discovery does not add
-persistent queues, runtime congestion feedback, or preemption. Existing Make demos
+The network-DAG adapter still constructs a fresh policy per selection; the
+single-rank compute planner retains one dequeuing policy. Neither discovery nor
+the arrival planner adds runtime congestion feedback or preemption. Existing Make demos
 explicitly compare FIFO/SJF; discovery makes new policies available through `--policy`
 but does not automatically add them to every experiment or comparison chart.
 
@@ -282,6 +314,12 @@ Each invocation creates `scheduler/results/raw/<UTC timestamp>-<workload>-<backe
 - `simulator.log` and simulator-generated `log/`: diagnostics and timing output.
 - `summary.json`: status, simulator revision, command, parameters, and per-rank
   total, exposed-communication, and compute cycles when reported.
+- `event_timing.rank<N>.log`: raw observed event timestamps, one file per rank.
+- `event_timing.csv`: validated event timestamps and derived interval durations.
+- `timesteps.json`: sorted change-point groups with `cycle`, `time_us`, and
+  `arrived`/`ready`/`started`/`completed` event references; a postprocessed transition export,
+  not interactive simulator stepping.
+- `gantt.png`: per-run timeline of the observed intervals.
 
 The cycle values are ASTRA-sim's simulated timing, not host elapsed time. The
 `GPU time` statistic means modeled accelerator compute, even when Docker runs on
@@ -292,7 +330,46 @@ metric. TTFT and per-token latency are not extracted by this runner yet.
 Use `--output-dir results/raw/my-experiment` for a named run; it must not already
 exist. `--timeout 120` controls the simulator time limit. Failure or timeout leaves
 the run artifacts and a failed summary. The runner also rejects an exit-code-zero
-run if any rank's completion record is missing.
+run if any rank's completion record is missing. It also requires ready, start,
+and end observations for every event, validating timestamp bounds, dependency
+ordering, and monotonicity.
+
+### Observed event timing and Gantt charts
+
+`Dockerfile` applies `patches/astra-event-timing.patch`. Instrumentation is opt-in
+via `ASTRA_EVENT_TIMING_DIR`; the runner sets it to the run output directory.
+Ready means first observed with arrival satisfied and dependencies free, including
+offline policy-added edges; start is dispatch, and end is the completion callback. The raw logs export actual
+ticks and `clock_period_ns` from `CLOCK_PERIOD` (1 ns in the current pinned build).
+No timestamps are inferred from durations, policy order, or rank totals.
+
+CSV schema version 2 adds declared `arrival_us` and its converted `arrival_cycle`:
+
+```text
+rank,event_id,name,event_type,phase,ready_cycle,start_cycle,end_cycle,clock_period_ns,ready_us,start_us,end_us,queue_wait_us,execution_us,arrival_us,arrival_cycle
+```
+
+In `timesteps.json`, `arrived` comes from declared `workload_release_times`, not
+observed callbacks. Ready/start/end remain simulator callback observations. The
+runner also checks that readiness and start do not precede arrival.
+
+Gantt charts use rank/type lanes, separate sublanes for overlapping RECVs, and a
+microsecond axis. SEND end is its recorded callback, **not assumed delivery**;
+RECV intervals include waiting. Old runs without telemetry must be rerun: there
+is no reconstructed timeline fallback.
+
+After generating the named batch below, plot its FIFO/SJF runs with:
+
+```bash
+make gantt GANTT_RUNS="results/raw/my-batch/fifo results/raw/my-batch/sjf" GANTT_OUTPUT=results/my_gantt.png GANTT_ARGS="--start-us 0 --end-us 500 --max-events 2000"
+```
+
+Paths are relative to `scheduler/` in the container. `GANTT_RUNS` defaults to
+`COMPARE_RUNS`, and `GANTT_OUTPUT` to `results/gantt.png`. Use `--start-us` and
+`--end-us` to zoom. The default `--max-events 500` applies across the **entire
+combined chart**, not per run or lane; truncation is explicitly annotated. Increase
+the limit or narrow the window for longer traces. These display limits do not
+truncate the saved CSV or transition export.
 
 ## A workload that distinguishes FIFO and SJF
 
@@ -348,8 +425,9 @@ included automatically, unlike the fixed-policy demos above.
 
 By default, each batch creates a new timestamped parent directory at
 `scheduler/results/raw/<stamp>-<experiment>-all-policies/`, containing per-policy
-run directories, a `batch.json` manifest, and `comparison.png`. To select an
-explicit parent, supply a **new, nonexistent** path (relative to `scheduler/`
+run directories (each with `gantt.png`), a `batch.json` manifest, `comparison.png`,
+and a combined batch `gantt.png`. The manifest records the combined `gantt` path.
+To select an explicit parent, supply a **new, nonexistent** path (relative to `scheduler/`
 inside the container):
 
 ```bash
@@ -383,12 +461,19 @@ make benchmark EXPERIMENT=jetson BENCHMARK_ARGS="-- --jobs 1000 --seed 42"
 Omitting `--jobs` keeps the fixed three-job regression. The generated admission
 order is not sorted, so FIFO normally differs from both SJF and LJF. The seed and
 complete duration list are recorded in every run; all policies receive the same
-jobs. All jobs still arrive at time zero on one compute resource, with no modeled
-switching overhead. A longer trace is not a model of concurrent CPU/GPU execution
-or real request arrivals. Mean latency remains analytical, not measured timestamps.
-The current offline adapter rebuilds ready-set policy instances for each selection,
-so host scheduling time grows roughly quadratically with job count; start with
-1,000 rather than millions of events.
+jobs. Without arrival options, all jobs still arrive at time zero on one compute
+resource, with no modeled switching overhead. To add synthetic releases:
+
+```bash
+make benchmark EXPERIMENT=jetson BENCHMARK_ARGS="-- --jobs 1000 --seed 42 --arrival-interval-us 500"
+# Fixed three-job durations, with explicit release times:
+make benchmark EXPERIMENT=jetson BENCHMARK_ARGS="-- --arrival-times-us 500 2000 2000"
+```
+
+These releases are enforced, but are not measured request traffic or a model of
+concurrent CPU/GPU execution. New runs derive arrival-relative flow/response
+metrics from declared releases and actual ASTRA callbacks; analytical metrics
+remain separately labeled.
 
 For a longer two-stage prefill/decode trace on the H100-inspired pair:
 
@@ -407,7 +492,8 @@ snapshot under `_config/`, so source config edits during a batch do not change i
 inputs.
 
 The runner uses the existing `compare_results.py` comparison script to produce
-the chart, including an analytical latency panel for the Jetson experiment.
+the chart, including a callback-based simulated latency panel for new Jetson runs
+(and an explicitly labeled analytical fallback for legacy-only comparisons).
 These are synthetic, modeled results, not hardware-calibrated measurements or
 predictions of measured device performance.
 
@@ -458,9 +544,10 @@ are rejected. Differences in workload parameters, backend, simulator revision,
 rank count, or saved configurations produce warnings and suppress speedup ratios.
 These checks flag known confounders, not prove workload equivalence. Identical
 completion cycles are expected when the workload offers no scheduling choice.
-The chart shows measured simulated completion cycles, not per-event timelines,
-TTFT, or host runtime. `plot_results.py` remains the separate speculation-estimate
-plotter and is not used for ASTRA run comparisons.
+The comparison chart shows simulated completion cycles and, where available,
+the separately labeled single-processor latency panel, not TTFT or host runtime.
+Use `make gantt` for observed per-event timelines. `plot_results.py` remains the
+separate speculation-estimate plotter and is not used for ASTRA run comparisons.
 
 ## Generate and inspect traces separately
 
@@ -513,3 +600,6 @@ GB/s, not gigabits/s. Profiling writes/replaces files in `traces/`.
 
 To work interactively, use `docker compose run --rm scheduler bash`. To run tests
 and both simulation baselines together, use `make test simulate speculative`.
+Arrival support is validated by 115 passing tests, including release enforcement
+and idle gaps on both analytical backends.
+These checks do not establish hardware calibration.
